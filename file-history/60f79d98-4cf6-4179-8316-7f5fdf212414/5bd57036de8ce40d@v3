@@ -1,0 +1,363 @@
+import { useState, useRef, useCallback } from 'react';
+import { parse as parsePartialJson } from 'partial-json';
+import {
+  Renderer,
+  StateProvider,
+  ActionProvider,
+  VisibilityProvider,
+  ValidationProvider,
+  createStateStore,
+} from '@json-render/react';
+import type { Spec } from '@json-render/core';
+import { registry } from '@/lib/generative-ui/registry';
+import { API_BASE_URL } from '@/lib/const';
+import axios from 'axios';
+
+/**
+ * Filter the streamed spec to only include elements with valid type/props,
+ * enabling progressive rendering as the AI response builds up.
+ * Returns null if the spec is not yet renderable.
+ */
+function buildSafeSpec(rawSpec: Record<string, unknown>): Spec | null {
+  if (!rawSpec?.root || !rawSpec?.elements) return null;
+  const elements = rawSpec.elements as Record<string, Record<string, unknown>>;
+  const rootEl = elements[rawSpec.root as string];
+  if (!rootEl?.type || rootEl?.props == null) return null;
+
+  const safeElements: Record<string, unknown> = {};
+  for (const [key, el] of Object.entries(elements)) {
+    if (el?.type && el?.props != null) {
+      safeElements[key] = el;
+    }
+  }
+  return {
+    root: rawSpec.root,
+    elements: safeElements,
+    ...(rawSpec.state ? { state: rawSpec.state } : {}),
+  } as unknown as Spec;
+}
+
+/**
+ * Minimal spec renderer following the official @json-render/react pattern:
+ * StateProvider → VisibilityProvider → ActionProvider → ValidationProvider → Renderer
+ */
+function SpecRenderer({
+  spec: rawSpec,
+  interactive,
+  loading,
+  onSubmit,
+}: {
+  spec: Record<string, unknown>;
+  interactive: boolean;
+  loading: boolean;
+  onSubmit: (data: Record<string, unknown> | null) => void;
+}) {
+  const spec = buildSafeSpec(rawSpec);
+  const initState = (rawSpec.state as Record<string, unknown>) ?? {};
+  const store = createStateStore(initState);
+
+  const handlers: Record<string, () => void> = {};
+  if (interactive) {
+    handlers.submit = () => { onSubmit(store.getSnapshot() as Record<string, unknown>); };
+    handlers.cancel = () => { onSubmit(null); };
+  }
+
+  if (!spec) {
+    return loading
+      ? <div className="rounded border p-4 text-sm text-muted-foreground">Generating UI...</div>
+      : null;
+  }
+
+  return (
+    <div className="rounded border p-4">
+      <StateProvider store={store}>
+        <VisibilityProvider>
+          <ActionProvider handlers={handlers}>
+            <ValidationProvider>
+              <Renderer spec={spec} registry={registry} loading={loading} />
+            </ValidationProvider>
+          </ActionProvider>
+        </VisibilityProvider>
+      </StateProvider>
+    </div>
+  );
+}
+
+interface GenerativeUIData {
+  interruptId?: string;
+  title: string;
+  spec: Record<string, unknown>;
+  interactive: boolean;
+}
+
+interface DisplayItem {
+  id: string;
+  type: 'text' | 'generative-ui' | 'ui-preview';
+  content?: string;
+  uiData?: GenerativeUIData;
+}
+
+export default function AgentUITestPage() {
+  const [items, setItems] = useState<DisplayItem[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [rawEvents, setRawEvents] = useState<string[]>([]);
+
+  const renderUIBuffer = useRef('');
+  const previewId = useRef<string | null>(null);
+
+  const addItem = useCallback((item: DisplayItem) => {
+    setItems(prev => {
+      const existing = prev.find(i => i.id === item.id);
+      if (existing) {
+        return prev.map(i => (i.id === item.id ? item : i));
+      }
+      return [...prev, item];
+    });
+  }, []);
+
+  const appendText = useCallback((text: string) => {
+    setItems(prev => {
+      const last = prev[prev.length - 1];
+      if (last?.type === 'text') {
+        return [...prev.slice(0, -1), { ...last, content: (last.content || '') + text }];
+      }
+      return [...prev, { id: crypto.randomUUID(), type: 'text', content: text }];
+    });
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const prompt = (formData.get('prompt') as string)?.trim();
+    if (!prompt || isStreaming) return;
+
+    setIsStreaming(true);
+    setItems([]);
+    setRawEvents([]);
+    renderUIBuffer.current = '';
+    previewId.current = null;
+
+    let buffer = '';
+    let receivedLength = 0;
+
+    const processLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      try {
+        const event = JSON.parse(trimmed) as { event: string; data?: unknown };
+        setRawEvents(prev => [...prev, trimmed]);
+
+        if (event.event === 'assistant') {
+          const data = event.data as { content?: string } | undefined;
+          if (data?.content) {
+            if (previewId.current) {
+              setItems(prev => prev.filter(i => i.id !== previewId.current));
+              previewId.current = null;
+              renderUIBuffer.current = '';
+            }
+            appendText(data.content);
+          }
+        }
+
+        if (event.event === 'tool-input') {
+          const data = event.data as { name?: string; input?: string } | undefined;
+          if (data?.name === 'render-ui' && data.input) {
+            renderUIBuffer.current += data.input;
+            try {
+              const parsed = parsePartialJson(renderUIBuffer.current) as Record<string, unknown>;
+              if (parsed?.spec || parsed?.title) {
+                const id = previewId.current || crypto.randomUUID();
+                previewId.current = id;
+                addItem({
+                  id,
+                  type: 'ui-preview',
+                  uiData: {
+                    title: (parsed.title as string) || 'UI',
+                    spec: (parsed.spec as Record<string, unknown>) || {},
+                    interactive: parsed.interactive === true,
+                  },
+                });
+              }
+            } catch {
+              // partial json not ready yet
+            }
+          }
+        }
+
+        if (event.event === 'generative-ui') {
+          const data = event.data as GenerativeUIData | undefined;
+          if (data?.spec) {
+            if (previewId.current) {
+              setItems(prev => prev.filter(i => i.id !== previewId.current));
+              previewId.current = null;
+              renderUIBuffer.current = '';
+            }
+            addItem({
+              id: crypto.randomUUID(),
+              type: 'generative-ui',
+              uiData: data,
+            });
+          }
+        }
+
+        if (event.event === 'error') {
+          const data = event.data as { message?: string } | undefined;
+          appendText(`\n[Error] ${data?.message || 'Unknown error'}`);
+        }
+      } catch {
+        // ignore parse errors for partial lines
+      }
+    };
+
+    try {
+      await axios.post(
+        `${API_BASE_URL}/agent-ui-test/run`,
+        { prompt },
+        {
+          onDownloadProgress: (progressEvent) => {
+            const xhr = progressEvent.event?.target as XMLHttpRequest | null;
+            if (!xhr) return;
+            const response = xhr.responseText;
+            const chunk = response.slice(receivedLength);
+            receivedLength = response.length;
+            buffer += chunk;
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              processLine(line);
+            }
+          },
+        },
+      );
+
+      if (buffer.trim()) processLine(buffer);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      appendText(`\n[Request Error] ${message}`);
+    }
+
+    setIsStreaming(false);
+  };
+
+  const handleFormSubmit = (itemId: string, formData: Record<string, unknown> | null) => {
+    appendText(
+      formData
+        ? `\n[Form submitted] ${JSON.stringify(formData, null, 2)}`
+        : `\n[Form cancelled]`,
+    );
+    // Mark as no longer interactive after submit
+    setItems(prev =>
+      prev.map(i =>
+        i.id === itemId && i.uiData
+          ? { ...i, uiData: { ...i.uiData, interactive: false } }
+          : i,
+      ),
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-background p-8">
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Agent-based Generative UI</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              LangGraph Agent + render-ui tool = dynamic UI generation
+            </p>
+          </div>
+          {items.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setItems([]); setRawEvents([]); }}
+              className="rounded border px-3 py-1 text-sm text-muted-foreground hover:bg-muted"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Input */}
+        <form onSubmit={handleSubmit} className="mb-8 flex gap-2">
+          <input
+            name="prompt"
+            placeholder="e.g. 生成一个用户信息卡片 / 创建一个反馈表单"
+            className="flex-1 rounded border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            disabled={isStreaming}
+          />
+          <button
+            type="submit"
+            disabled={isStreaming}
+            className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {isStreaming ? 'Running...' : 'Run Agent'}
+          </button>
+        </form>
+
+        {/* Display items */}
+        <div className="space-y-4">
+          {items.map(item => (
+            <div key={item.id}>
+              {item.type === 'text' && (
+                <div className="rounded border bg-muted/30 px-4 py-3 text-sm whitespace-pre-wrap">
+                  {item.content}
+                </div>
+              )}
+
+              {(item.type === 'generative-ui' || item.type === 'ui-preview') && item.uiData && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="font-medium">{item.uiData.title}</span>
+                    {item.type === 'ui-preview' && (
+                      <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
+                        streaming...
+                      </span>
+                    )}
+                    {item.uiData.interactive && (
+                      <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                        interactive
+                      </span>
+                    )}
+                  </div>
+                  <SpecRenderer
+                    spec={item.uiData.spec}
+                    interactive={item.uiData.interactive}
+                    loading={item.type === 'ui-preview'}
+                    onSubmit={(data) => handleFormSubmit(item.id, data)}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Loading */}
+        {isStreaming && items.length === 0 && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            Agent is thinking...
+          </div>
+        )}
+
+        {/* Debug */}
+        {rawEvents.length > 0 && (
+          <details className="mt-8 rounded border p-4">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+              Raw SSE events ({rawEvents.length})
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-auto text-xs leading-relaxed text-muted-foreground">
+              {rawEvents.map((line) => {
+                try {
+                  return JSON.stringify(JSON.parse(line), null, 2);
+                } catch {
+                  return line;
+                }
+              }).join('\n---\n')}
+            </pre>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}

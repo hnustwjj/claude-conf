@@ -1,0 +1,179 @@
+import { Body, Controller, Post, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
+import { PassThrough } from 'stream';
+import { randomUUID } from 'crypto';
+import { MemorySaver } from '@langchain/langgraph';
+import { createAgent, createMiddleware } from 'langchain';
+import { SystemMessage, HumanMessage, isAIMessageChunk } from '@langchain/core/messages';
+import { renderUITool } from '../../agents/tools/render-ui.tool';
+import { catalog } from '../../agents/generative-ui/catalog';
+import { getModel, EModelName } from '../../config/model';
+import { IGenerativeUIPayload } from '../../common/generative-ui';
+
+const memory = new MemorySaver();
+
+const SYSTEM_PROMPT = `你是一个 UI 生成助手。你的唯一目标是根据用户的描述，使用 render-ui 工具生成对应的 UI 组件。
+
+## 规则
+
+1. 收到用户请求后，直接调用 render-ui 工具生成 UI，不要用文字描述 UI。
+2. 使用 flat-map 格式（json-render）的 spec：root + elements + state。
+3. 对于纯展示类 UI，使用 interactive=false。
+4. 对于需要用户输入的表单类 UI，使用 interactive=true，并配置 $bindState 和 submit/cancel action。
+5. 调用 render-ui 后，只需要一句简短的引导语，不要重复 UI 内容。
+
+## 可用组件
+
+${catalog.prompt()}
+`;
+
+const systemPromptMiddleware = createMiddleware({
+  name: 'GenUIAgentSystemPrompt',
+  wrapModelCall: async (request, handler) => {
+    return handler({
+      ...request,
+      messages: [new SystemMessage({ content: SYSTEM_PROMPT }), ...request.messages],
+    });
+  },
+});
+
+interface StreamEvent {
+  event: string;
+  node?: string;
+  data?: unknown;
+}
+
+@Controller('/api/generative-ui')
+export class GenerativeUIAgentController {
+  @Post('agent')
+  async agentGenerate(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Body() body: { prompt?: string; threadId?: string },
+  ): Promise<void> {
+    const prompt = body.prompt?.trim();
+    if (!prompt) {
+      res.status(400).json({ error: 'prompt is required' });
+      return;
+    }
+
+    const threadId = body.threadId || randomUUID();
+
+    req.socket.setTimeout(0);
+    req.socket.setNoDelay();
+    req.socket.setKeepAlive(true);
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.setHeader('cache-control', 'no-cache');
+    res.setHeader('connection', 'keep-alive');
+
+    const ws = new PassThrough();
+    ws.pipe(res);
+
+    const emit = (evt: StreamEvent) => {
+      if (!ws.destroyed) {
+        ws.write(JSON.stringify({ ...evt, timestamp: Date.now() }) + '\n');
+      }
+    };
+
+    try {
+      const model = getModel(EModelName.DeepSeekChat);
+      const agent = createAgent({
+        model,
+        tools: [renderUITool],
+        middleware: [systemPromptMiddleware],
+        checkpointer: memory,
+      });
+
+      const stream = agent.streamEvents(
+        { messages: [new HumanMessage(prompt)] },
+        {
+          version: 'v2' as const,
+          configurable: { thread_id: threadId },
+        },
+      );
+
+      emit({ event: 'agent-start', node: 'gen-ui-agent', data: 'gen-ui-agent' });
+
+      for await (const streamEvent of stream) {
+        if (!streamEvent || typeof streamEvent !== 'object') continue;
+
+        const { name, event, data } = streamEvent as {
+          run_id: string;
+          name: string;
+          event: string;
+          data: Record<string, unknown>;
+        };
+
+        switch (event) {
+          case 'on_chat_model_stream': {
+            const chunk = data.chunk;
+            if (!chunk || !isAIMessageChunk(chunk as any)) break;
+            const text = typeof (chunk as any).content === 'string' ? (chunk as any).content : '';
+            if (text) {
+              emit({ event: 'assistant', node: 'gen-ui-agent', data: { content: text } });
+            }
+            break;
+          }
+
+          case 'on_tool_start': {
+            if (name === 'render-ui') {
+              emit({ event: 'tool-call', node: 'gen-ui-agent', data: { name: 'render-ui' } });
+            }
+            break;
+          }
+
+          case 'on_tool_end': {
+            if (name === 'render-ui') {
+              const artifact = (data.output as { artifact?: { title?: string; spec?: Record<string, unknown> } })?.artifact;
+              if (artifact?.spec) {
+                emit({
+                  event: 'generative-ui',
+                  node: 'gen-ui-agent',
+                  data: { title: artifact.title || '', spec: artifact.spec, interactive: false },
+                });
+              }
+            }
+            break;
+          }
+
+          case 'on_chain_stream': {
+            const interrupts = (data as { chunk?: Record<string, unknown> }).chunk?.__interrupt__;
+            if (!Array.isArray(interrupts) || interrupts.length === 0) break;
+            const interrupt = interrupts[0] as { id?: string; value?: unknown };
+            if (!interrupt?.value || typeof interrupt.value !== 'object') break;
+            const payload = interrupt.value as IGenerativeUIPayload;
+            if (payload.kind === 'generative-ui') {
+              emit({
+                event: 'generative-ui',
+                node: 'gen-ui-agent',
+                data: {
+                  interruptId: interrupt.id,
+                  title: payload.title,
+                  spec: payload.spec,
+                  interactive: true,
+                },
+              });
+            }
+            break;
+          }
+
+          case 'on_tool_error': {
+            if (name === 'render-ui') {
+              const message = data.error instanceof Error ? (data.error as Error).message : String(data.error);
+              emit({ event: 'error', node: 'gen-ui-agent', data: { message } });
+            }
+            break;
+          }
+        }
+      }
+
+      emit({ event: 'agent-end', node: 'gen-ui-agent', data: 'gen-ui-agent' });
+      emit({ event: 'end' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emit({ event: 'error', data: { message } });
+    } finally {
+      ws.end();
+    }
+  }
+}

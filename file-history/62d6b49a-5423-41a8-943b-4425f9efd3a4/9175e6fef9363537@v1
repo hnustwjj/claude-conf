@@ -1,0 +1,59 @@
+export function formatDate(date: number | Date) {
+  if (typeof date === 'number') {
+    date = new Date(date);
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0'); // 月份补零
+  const day = String(date.getDate()).padStart(2, '0'); // 日期补零
+  return `${year}-${month}-${day}`;
+}
+
+export function formatDateTime(date: number | Date) {
+  if (typeof date === 'number') {
+    date = new Date(date);
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0'); // 月份补零
+  const day = String(date.getDate()).padStart(2, '0'); // 日期补零
+  const hour = String(date.getHours()).padStart(2, '0'); // 小时补零
+  const minute = String(date.getMinutes()).padStart(2, '0'); // 分钟补零
+  const second = String(date.getSeconds()).padStart(2, '0'); // 秒补零
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
+export function formatError(error: unknown) {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+
+  return String(error);
+}
+
+export interface IRetryOptions {
+  interval?: number;
+  max?: number;
+}
+
+export function retry<T>(action: () => Promise<T>, { interval, max = 32 }: IRetryOptions = {}) {
+  let count = 0;
+
+  return function wrap(): Promise<T> {
+    return action().catch(error => {
+      if (count === max) {
+        throw error;
+      }
+
+      count++;
+      if (interval) {
+        return new Promise(resolve => setTimeout(resolve, interval)).then(wrap);
+      } else {
+        return wrap();
+      }
+    });
+  };
+}
+
+export function ensureHttps(url: string | undefined) {
+  return url?.replace(/^http:/, 'https:');
+}

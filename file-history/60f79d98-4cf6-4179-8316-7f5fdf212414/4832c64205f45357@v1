@@ -1,0 +1,81 @@
+import { useRef, useCallback, useMemo } from 'react';
+import {
+  Renderer,
+  StateProvider,
+  ActionProvider,
+  VisibilityProvider,
+  ValidationProvider,
+  createStateStore,
+} from '@json-render/react';
+import { registry } from '@/lib/generative-ui/registry';
+
+interface SpecShape {
+  root: string;
+  elements: Record<string, unknown>;
+  state?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+interface GenerativeUICardProps {
+  spec: Record<string, unknown>;
+  initialState?: Record<string, unknown>;
+  interactive?: boolean;
+  disabled?: boolean;
+  onSubmit?: (formData: Record<string, unknown> | null) => void;
+}
+
+function toSpec(raw: Record<string, unknown>): SpecShape {
+  return {
+    root: (raw.root as string) ?? 'main',
+    elements: (raw.elements as Record<string, unknown>) ?? {},
+    state: (raw.state as Record<string, unknown>) ?? {},
+    ...raw,
+  };
+}
+
+const NOOP_HANDLERS = {};
+
+export function GenerativeUICard({
+  spec: rawSpec,
+  initialState,
+  interactive = false,
+  disabled,
+  onSubmit,
+}: GenerativeUICardProps) {
+  const spec = toSpec(rawSpec);
+  const storeRef = useRef(
+    createStateStore((initialState ?? spec.state ?? {}) as Record<string, unknown>),
+  );
+
+  const handlers = useCallback(
+    () => ({
+      submit: () => {
+        if (disabled) return;
+        const snapshot = storeRef.current.getSnapshot();
+        onSubmit?.(snapshot as Record<string, unknown>);
+      },
+      cancel: () => {
+        if (disabled) return;
+        onSubmit?.(null);
+      },
+    }),
+    [disabled, onSubmit],
+  );
+
+  const actionHandlers = useMemo(
+    () => (interactive && onSubmit ? handlers() : NOOP_HANDLERS),
+    [interactive, onSubmit, handlers],
+  );
+
+  return (
+    <StateProvider store={storeRef.current}>
+      <ValidationProvider>
+        <VisibilityProvider>
+          <ActionProvider handlers={actionHandlers}>
+            <Renderer spec={spec as any} registry={registry} />
+          </ActionProvider>
+        </VisibilityProvider>
+      </ValidationProvider>
+    </StateProvider>
+  );
+}

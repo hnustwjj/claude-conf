@@ -1,0 +1,359 @@
+import { Message } from '@/types';
+import { cn } from '@/lib/utils';
+import { extractSingleLinePreview, getEventLabel, isToolCallStep } from '@/lib/chatUtils';
+import { AlertTriangle, ChevronRight, TerminalSquare, Wrench } from 'lucide-react';
+import { MarkdownRenderer } from '@/components/MarkdownRenderer';
+import { GenerativeUICard } from './GenerativeUICard';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { ThinkingText } from './ThinkingText';
+import {
+  EVENT_AGENT_START,
+  EVENT_GENERATIVE_UI,
+  EVENT_CONTEXT_SUMMARIZED,
+  EVENT_ERROR,
+  EVENT_TOOL_OUTPUT,
+} from '@/lib/const';
+
+function getDetailStatus(message: Message): string | undefined {
+  return message.toolDetail?.summary.split(' · ').at(-1);
+}
+
+function shouldHideCompletedStatus(message: Message): boolean {
+  return getDetailStatus(message) === '已完成';
+}
+
+interface MessageItemProps {
+  message: Message;
+  isLoading: boolean;
+  isStreaming?: boolean;
+  secondaryMessage?: Message;
+  displayVariant?: 'default' | 'thinking';
+  thinkingDisplayMode?: 'collapsible' | 'inline';
+  isSelected?: boolean;
+  onInterruptSubmit: (interruptId: string | undefined, values: string | Record<string, unknown>) => Promise<void>;
+  onSelectToolDetail?: (messageId: string) => void;
+}
+
+export function MessageItem({
+  message,
+  isLoading,
+  isStreaming = false,
+  secondaryMessage,
+  displayVariant = 'default',
+  thinkingDisplayMode = 'collapsible',
+  isSelected = false,
+  onSelectToolDetail,
+  onInterruptSubmit,
+}: MessageItemProps) {
+  const isThinkingVariant = displayVariant === 'thinking';
+  const label = getEventLabel(message);
+  const isToolErrorEvent = message.event === EVENT_ERROR && !!message.toolName;
+  const isError = message.event === EVENT_ERROR && !isToolErrorEvent;
+  const isGenerativeUI = message.event === EVENT_GENERATIVE_UI;
+  const isUser = message.role === 'user';
+  const isToolMessage = isToolCallStep(message.event) || message.event === EVENT_TOOL_OUTPUT || isToolErrorEvent;
+  const isStatusMessage = message.event === EVENT_AGENT_START || message.event === EVENT_CONTEXT_SUMMARIZED;
+  const hasThinking = typeof message.thinking === 'string' && message.thinking.trim().length > 0;
+  const preview = extractSingleLinePreview(message.content);
+  const secondaryPreview = secondaryMessage ? extractSingleLinePreview(secondaryMessage.content) : '';
+  const detailStatus = getDetailStatus(message);
+  const hideCompletedStatus = shouldHideCompletedStatus(message);
+
+  if (isError) {
+    return (
+      <div className="w-full min-w-0 rounded-2xl border border-destructive/30 bg-destructive/10 px-5 py-3.5 shadow-sm !mt-3">
+        <div className="flex items-start gap-2 text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide opacity-70">Error</div>
+            <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isGenerativeUI && message.generativeUI) {
+    if (message.generativeUI.answer) {
+      return (
+        <div className="w-full min-w-0 rounded-2xl border bg-background px-5 py-4 shadow-sm space-y-3 !mt-3">
+          <div className="flex items-center justify-between">
+            <div className="font-medium text-sm text-foreground">{message.generativeUI.title || 'UI'}</div>
+            <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+              <svg className="h-3 w-3" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              已确认
+            </span>
+          </div>
+          {typeof message.generativeUI.answer === 'object' && (
+            <div className="space-y-1.5">
+              {Object.entries(message.generativeUI.answer).map(([key, value]) => (
+                <div key={key} className="flex gap-2 text-sm">
+                  <span className="text-muted-foreground shrink-0">{key}:</span>
+                  <span className="text-foreground">{typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (message.generativeUI.isPreview) {
+      return (
+        <div className="w-full min-w-0 rounded-2xl border border-border/60 bg-muted/30 px-4 py-4 shadow-sm !mt-3">
+          <div className="mb-2 font-medium text-sm text-foreground">{message.generativeUI.title}</div>
+          <div className="text-xs text-muted-foreground">UI 生成中...</div>
+        </div>
+      );
+    }
+
+    if (message.generativeUI.interactive) {
+      return (
+        <div className="w-full min-w-0 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-4 shadow-sm dark:border-amber-700 dark:bg-amber-950/30 !mt-3">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+            需要您提供信息
+          </div>
+          <div className="mb-2 font-medium text-sm text-foreground">{message.generativeUI.title}</div>
+          <GenerativeUICard
+            spec={message.generativeUI.spec}
+            interactive
+            disabled={isLoading}
+            onSubmit={formData => {
+              if (formData === null) {
+                onInterruptSubmit(message.generativeUI?.interruptId, '用户取消');
+              } else {
+                onInterruptSubmit(message.generativeUI?.interruptId, formData);
+              }
+            }}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-full min-w-0 !mt-3">
+        <GenerativeUICard
+          spec={message.generativeUI.spec}
+          interactive={false}
+        />
+      </div>
+    );
+  }
+
+  if (isToolMessage) {
+    if (message.toolDetail) {
+      if (message.toolDetail.kind === 'execute') {
+        const command = message.toolDetail.code || message.toolDetail.title;
+        const output = message.toolDetail.output || '';
+        const status = hideCompletedStatus ? '' : (detailStatus || '');
+        const isExecuteError = message.isError || message.toolDetail.status === 'error';
+        const commandPanelClassName = isExecuteError
+          ? 'border-destructive/25 bg-destructive/5'
+          : 'border-emerald-500/20 bg-emerald-500/5';
+        const commandHeaderClassName = isExecuteError
+          ? 'border-destructive/25 text-destructive'
+          : 'border-emerald-500/20 text-emerald-600 dark:text-emerald-400';
+        const outputPanelClassName = isExecuteError
+          ? 'border-destructive/25 bg-destructive/5'
+          : 'border-sky-500/20 bg-sky-500/5';
+        const outputHeaderClassName = isExecuteError
+          ? 'border-destructive/25 text-destructive'
+          : 'border-sky-500/20 text-sky-600 dark:text-sky-400';
+
+        return (
+          <details className="group w-full overflow-hidden rounded-xl border border-border/60 bg-background/40" open={false}>
+            <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-90" />
+              <div className={cn(
+                'flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs font-semibold',
+                isExecuteError
+                  ? 'border-destructive/30 text-destructive'
+                  : 'border-border/50 text-foreground/80',
+              )}>
+                <TerminalSquare className={cn('h-3.5 w-3.5', isExecuteError ? 'text-destructive' : 'text-emerald-500')} />
+                <span>Bash</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                {status ? (
+                  <div className={cn('truncate text-xs', isExecuteError ? 'text-destructive/80' : 'text-muted-foreground')}>
+                    {status}
+                  </div>
+                ) : null}
+              </div>
+            </summary>
+
+            <div className="space-y-3 border-t border-border/50 px-3 py-3">
+              <div className={cn('rounded-lg border', commandPanelClassName)}>
+                <div className={cn('border-b px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide', commandHeaderClassName)}>
+                  Command
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap px-3 py-2 text-xs leading-6 text-foreground">{command}</pre>
+              </div>
+
+              <div className={cn('rounded-lg border', outputPanelClassName)}>
+                <div className={cn('border-b px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide', outputHeaderClassName)}>
+                  Output
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap px-3 py-2 text-xs leading-6 text-foreground">
+                  {output || '[no output]'}
+                </pre>
+              </div>
+            </div>
+          </details>
+        );
+      }
+
+      return (
+        <button
+          type="button"
+          onClick={() => onSelectToolDetail?.(message.id)}
+          className={cn(
+            'group flex w-full min-w-0 items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors',
+            isSelected
+              ? 'border-primary/40 bg-primary/5'
+              : 'border-border/50 bg-muted/30 hover:bg-muted/50',
+            message.isError ? 'text-destructive' : 'text-foreground/85',
+          )}
+        >
+          <div className={cn(
+            'flex items-center gap-1.5 shrink-0 rounded-md border px-2 py-1 text-xs font-semibold',
+            message.isError
+              ? 'border-destructive/30 bg-destructive/10 text-destructive'
+              : 'border-border/50 bg-background text-foreground/80',
+          )}>
+            <Wrench className={cn('h-3.5 w-3.5', message.isError ? 'text-destructive' : 'text-amber-500')} />
+            <span>{message.toolName || 'tool'}</span>
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium">{message.toolDetail.title}</div>
+            {!hideCompletedStatus && detailStatus ? (
+              <div className={cn(
+                'truncate text-xs',
+                message.isError ? 'text-destructive/80' : 'text-muted-foreground',
+              )}>
+                {detailStatus}
+              </div>
+            ) : null}
+          </div>
+
+        </button>
+      );
+    }
+
+    const isToolError = secondaryMessage?.isError ?? message.isError;
+
+    return (
+      <TooltipProvider delayDuration={250}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={cn(
+                'group flex w-full min-w-0 items-center gap-2 py-1',
+                isThinkingVariant ? 'text-xs' : 'text-sm',
+                isToolError
+                  ? 'text-destructive'
+                  : isThinkingVariant
+                    ? 'text-muted-foreground/75'
+                    : 'text-muted-foreground',
+              )}
+            >
+              <div className={cn(
+                'flex items-center gap-1.5 shrink-0 rounded-md border px-2 py-0.5',
+                isToolError
+                  ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                  : isThinkingVariant
+                    ? 'border-border/40 bg-muted/35 text-foreground/70'
+                    : 'border-border/50 bg-muted/50 text-foreground/80'
+              )}>
+                <Wrench className={cn("h-3.5 w-3.5", isToolError ? "text-destructive" : "text-amber-500")} />
+                <span className="font-semibold text-xs leading-none">{message.toolName || 'tool'}</span>
+              </div>
+
+              <div className="flex-1 min-w-0 flex items-center gap-2 overflow-hidden text-xs">
+                {secondaryMessage && secondaryPreview ? (
+                  <span className={cn("truncate leading-none", isToolError ? "text-destructive/80" : isThinkingVariant ? "text-muted-foreground/65" : "text-muted-foreground/80")}>{secondaryPreview}</span>
+                ) : preview ? (
+                  <span className={cn("truncate leading-none", isToolError ? "text-destructive/80" : isThinkingVariant ? "text-muted-foreground/65" : "text-muted-foreground/80")}>{preview}</span>
+                ) : null}
+              </div>
+
+            </div>
+          </TooltipTrigger>
+          <TooltipContent
+            side="top"
+            align="start"
+            className="max-w-xl max-h-[400px] overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-popover px-3 py-2 font-mono text-[11px] leading-relaxed text-popover-foreground shadow-lg"
+          >
+            {secondaryMessage ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">INPUT</div>
+                  <div className={message.isError ? "text-destructive" : ""}>{message.content}</div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">OUTPUT</div>
+                  <div className={secondaryMessage.isError ? "text-destructive" : ""}>{secondaryMessage.content}</div>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {message.event === EVENT_TOOL_OUTPUT ? 'OUTPUT' : 'INPUT'}
+                </div>
+                <div className={message.isError ? "text-destructive" : ""}>{message.content}</div>
+              </div>
+            )}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  if (isUser) {
+    return (
+      <div className="max-w-[85%] rounded-2xl rounded-tr-none bg-primary px-5 py-3.5 text-primary-foreground shadow-sm">
+        <div className="whitespace-pre-wrap">{message.content}</div>
+      </div>
+    );
+  }
+
+  if (isStatusMessage) {
+    return (
+      <div className={cn('flex min-w-0 items-baseline gap-2 py-1', isThinkingVariant && 'text-xs')}>
+        {label && (
+          <div className={cn('text-[10px] uppercase tracking-wide', isThinkingVariant ? 'text-muted-foreground/65' : 'text-muted-foreground/80')}>
+            {label}
+          </div>
+        )}
+        <div className={cn(isThinkingVariant ? 'text-[11px] font-medium text-muted-foreground/75' : 'text-sm font-medium text-foreground/80')}>{message.content}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-0 space-y-2 text-sm leading-relaxed">
+      {label && (
+        <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/80">
+          {label}
+        </div>
+      )}
+      {hasThinking && thinkingDisplayMode === 'collapsible' && (
+        <details className="min-w-0 overflow-hidden rounded-lg border border-border/70 bg-muted/30 px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            思考过程
+          </summary>
+          <div className="mt-2 min-w-0 overflow-hidden">
+            <ThinkingText content={message.thinking || ''} />
+          </div>
+        </details>
+      )}
+      {hasThinking && thinkingDisplayMode === 'inline' && (
+        <div className="min-w-0 overflow-hidden text-muted-foreground/75">
+          <ThinkingText content={message.thinking || ''} />
+        </div>
+      )}
+      {message.content && <MarkdownRenderer content={message.content} isAnimating={isStreaming} />}
+    </div>
+  );
+}

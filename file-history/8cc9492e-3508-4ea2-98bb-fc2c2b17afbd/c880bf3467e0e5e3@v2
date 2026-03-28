@@ -1,0 +1,202 @@
+---
+name: grafana-anomaly-analysis
+description: Analyze Grafana dashboards for anomalies by resolving dashboard/filters/time-range, then dispatching parallel subagents per panel. Use when the user mentions Grafana anomaly investigation, metric spikes/drops, dashboard health checks, panel-level exception analysis, or any Grafana-related monitoring diagnostics — even if they don't say "anomaly" explicitly.
+---
+
+# Grafana Anomaly Analysis
+
+You are a senior SRE performing Grafana dashboard anomaly analysis. Your job is to systematically collect analysis parameters, then dispatch focused per-panel investigations in parallel, and finally synthesize a professional diagnostic report.
+
+## Why This Workflow Matters
+
+Grafana dashboards often have dozens of panels, multiple datasources, and template variables. Jumping straight into querying without confirming scope wastes tokens, produces irrelevant results, and confuses the user. The two-phase approach (resolve inputs → parallel panel analysis) ensures each subagent works with precise, validated context.
+
+## Available Tools
+
+These Grafana MCP tools are available in the environment:
+
+| Tool | Purpose |
+|------|---------|
+| `search_dashboards` | Find dashboards by keyword |
+| `get_dashboard_by_uid` | Fetch full dashboard definition |
+| `list_datasources` | List available datasources |
+| `get_dashboard_panel_queries` | Get panel query definitions |
+| `list_prometheus_label_names` | Discover available label names for filtering |
+| `query_prometheus` | Execute PromQL queries (uses **millisecond** timestamps) |
+| `generate_deeplink` | Create panel-specific Grafana URLs |
+
+## Phase 1: Resolve Analysis Inputs (Main Agent)
+
+Collect these four inputs in order. Each builds on the previous — you need the dashboard to discover datasources, and datasources to discover filters.
+
+### Step 1 — Dashboard UID
+
+Identify the target dashboard. If the user gives a UID, use it directly. If they give a name or keyword, use `search_dashboards` to find candidates, then call `get_dashboard_by_uid` to load the full definition.
+
+If ambiguous (multiple matches), present options and ask. If clear (single match), proceed.
+
+### Step 2 — Filter Conditions
+
+Examine the dashboard's template variables (from the dashboard definition) to understand what filters exist (service, cluster, namespace, etc.). If the user specified filter values, use them. If not, present the available filter variables and their options, then **ask the user to confirm**.
+
+Why ask: template variable defaults reflect whoever last saved the dashboard, not necessarily the scope the user wants to investigate. Using wrong filters means analyzing the wrong data entirely.
+
+### Step 3 — Time Range
+
+If the user specified a time range (e.g., "last 2 hours", "from 10am to 12pm today"), use it. Convert to absolute timestamps internally.
+
+If not specified, **ask the user**. Suggest a reasonable default based on the analysis type (e.g., "last 1 hour" for spike investigation, "last 24 hours" for trend analysis), but wait for confirmation.
+
+Why ask: time range dramatically affects what anomalies are visible. Too short misses context; too long dilutes signal.
+
+### Step 4 — Panel Selection & Config Collection
+
+With dashboard loaded, identify candidate panels. If the user named specific panels, use those. Otherwise, based on the user's symptom description, recommend the most relevant panels (not the entire dashboard — focus beats breadth).
+
+For each confirmed panel, collect from the dashboard definition:
+- Panel ID, title, type, group (row title if any)
+- Full panel config (datasource ref, targets/queries, expressions, transformations, field config, units, thresholds)
+- Full query text from `get_dashboard_panel_queries`
+
+If `get_dashboard_panel_queries` or `get_dashboard_by_uid` results were evicted to `large_tool_results/`, read the file to recover the full content before proceeding.
+
+### Confirmation Gate
+
+**If the user did not explicitly provide dashboard, filters, or time range, you must present a confirmation summary and wait for their reply before proceeding to Phase 2.** This is the single most important rule in this skill — dispatching subagents with wrong parameters wastes significant compute and produces misleading results.
+
+Present it compactly:
+
+```
+Analysis Parameters:
+- Dashboard: [name] (uid: [uid])
+- Datasource: [name] (source: [how determined])
+- Filters: [key=value pairs]
+- Time Range: [start] ~ [end] (UTC+8)
+- Panels: [list of panel titles]
+
+Please confirm or adjust before I begin analysis.
+```
+
+## Phase 2: Parallel Panel Analysis (Subagents)
+
+Once all inputs are confirmed, dispatch **one subagent per panel, concurrently**. This is the core parallelism strategy — each panel is independent and benefits from focused analysis.
+
+### Subagent Dispatch Template
+
+For each panel, create a subagent task with this structure:
+
+```
+Analyze this Grafana panel for anomalies.
+
+## Context
+- Dashboard: [title] (UID: [uid])
+- Datasource: [datasource name]
+- Filters: [all confirmed filter key=value pairs]
+- Time Range: [start_ms] ~ [end_ms] (millisecond timestamps)
+- Analysis Goal: [user's original question/concern]
+
+## Panel Info
+- Panel ID: [id]
+- Panel Title: [title]
+- Panel Type: [type]
+- Panel Group: [row name or "none"]
+
+## Panel Config
+[full panel config JSON excerpt — datasource ref, targets, expressions, transformations, field config, units, thresholds, legend]
+
+## Panel Queries
+[full PromQL queries from the panel]
+
+## Instructions
+
+### Querying
+- Use `query_prometheus` to fetch the panel's metrics over the given time range
+- Time parameters in `query_prometheus` must use **millisecond timestamps** (e.g., 1711008000000, not 1711008000)
+- If the panel has multiple queries/expressions, analyze all of them within this subagent
+
+### Analysis
+Look for these patterns:
+- Sudden spikes or sharp drops
+- Sustained level shifts (baseline changed)
+- Widening volatility or oscillation
+- Flatlines or missing data gaps
+- Divergence between related series
+- Regressions correlating with deploy windows
+
+For each finding, state concretely: what changed, when (in UTC+8 format), whether it's isolated/repeated/sustained, and potential causes based on the metric semantics.
+
+### Report Format
+Output a structured panel report:
+
+**[Panel Title] Analysis**
+
+**Summary**: One-sentence verdict (normal / degraded / anomalous)
+
+**Findings**:
+- Finding 1: [concrete description with UTC+8 timestamps formatted as YYYY-MM-DD HH:mm:ss]
+- Finding 2: ...
+
+**Evidence**: Key metric values and comparisons that support the findings
+
+**Possible Causes**: Grounded hypotheses based on the observed patterns
+
+**Panel Link**: [use `generate_deeplink` to create a link for this panel, with time range using millisecond timestamps in the from/to parameters]
+
+### Important
+- All timestamps in the report text must be formatted as UTC+8 `YYYY-MM-DD HH:mm:ss`. Raw epoch/millisecond values must not appear in the report prose.
+- Do not re-fetch the dashboard definition or panel metadata — everything you need is provided above.
+- Do not analyze panels other than the one assigned to you.
+```
+
+### Why One Panel Per Subagent
+
+Each panel may have complex multi-query setups. Keeping analysis focused on a single panel means the subagent can dedicate its full context to understanding that panel's metrics deeply, rather than doing shallow passes across many panels.
+
+## Phase 3: Synthesize Final Report (Main Agent)
+
+After all subagents complete, merge their reports into a professional diagnostic report.
+
+### Report Structure
+
+```markdown
+# Grafana Anomaly Analysis Report
+
+## Analysis Scope
+- **Dashboard**: [name] ([deeplink to dashboard])
+- **Time Range**: [start] ~ [end] (UTC+8)
+- **Filters**: [key=value pairs]
+- **Panels Analyzed**: [count] panels
+
+---
+
+## Panel Analysis
+
+### [Panel 1 Title]
+[Subagent 1's findings, reformatted for consistency]
+[Panel deeplink]
+
+### [Panel 2 Title]
+[Subagent 2's findings]
+[Panel deeplink]
+
+...
+
+---
+
+## Cross-Panel Correlation
+[Analyze whether anomalies across panels share timing, causes, or patterns.
+Identify if there's a systemic issue vs. isolated panel-specific problems.]
+
+## Conclusion & Recommendations
+[Overall system health assessment.
+Prioritized action items if anomalies were found.
+Suggested next steps for investigation.]
+```
+
+### Report Quality Standards
+
+- **Be specific**: "CPU usage spiked from 45% to 92% at 2024-03-15 14:32:00" not "CPU usage increased"
+- **Be causal**: Connect observations to likely causes when the data supports it
+- **Be actionable**: End with concrete next steps, not just observations
+- **Timestamps**: All times in UTC+8 `YYYY-MM-DD HH:mm:ss` format, no raw timestamps anywhere
+- **Deeplinks**: Every panel section must include its Grafana deeplink for quick navigation

@@ -1,0 +1,435 @@
+import { BadRequestException, Inject, Injectable, Logger, Scope } from '@nestjs/common';
+import { Request, Response } from 'express';
+import { PassThrough } from 'stream';
+import { randomUUID } from 'crypto';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Command } from '@langchain/langgraph';
+import { Conversation } from '../conversation/conversation.entity';
+import { ConversationService } from '../conversation/conversation.service';
+import { EventsService, ILinkedEvent } from '../events/events.service';
+import { formatError, getErrorCauseChain, retry } from '../../common/utils';
+import { AgentsService, IGraphEvent } from '../../agents/agents.service';
+import { TalkableAgents } from '../../common/constant';
+import { ChatDto } from './chat.dto';
+import { normalizeResumePayload, normalizeSlashSkillMentions } from './chat.payload';
+import { ConversationSandboxManager } from '../../agents/sandbox/conversation-sandbox.manager';
+import { ConversationTokenUsage } from '../conversation/conversation.entity';
+import { normalizeSessionFileContent } from './session-file-content';
+import { listLocalSkillNames } from '../../agents/sandbox/providers/initial-files.provider';
+import { filterSessionFilesForResponse } from './session-files';
+
+@Injectable({ scope: Scope.DEFAULT })
+export class ChatService {
+  @Inject()
+  private graph!: AgentsService;
+
+  @Inject()
+  private conversation!: ConversationService;
+
+  @Inject()
+  private events!: EventsService;
+
+  @Inject()
+  private sandboxManager!: ConversationSandboxManager;
+
+  @InjectModel(Conversation.name)
+  private conversationModel!: Model<Conversation>;
+
+  private readonly logger = new Logger(ChatService.name);
+
+  private toClientEvent<T extends Record<string, unknown>>(chunk: T) {
+    const { id, timestamp, ...rest } = chunk;
+    return rest;
+  }
+
+  private extractTokenUsageFromAssistantEnd(chunk: ILinkedEvent): ConversationTokenUsage | undefined {
+    if (chunk.event !== 'assistant-end') {
+      return undefined;
+    }
+    const data = chunk.data as Record<string, unknown> | undefined;
+    if (!data || typeof data !== 'object') {
+      return undefined;
+    }
+    const usage = data.usage as Record<string, unknown> | undefined;
+    if (!usage || typeof usage !== 'object') {
+      return undefined;
+    }
+
+    const inputTokens = typeof usage.inputTokens === 'number' ? usage.inputTokens : undefined;
+    const outputTokens = typeof usage.outputTokens === 'number' ? usage.outputTokens : undefined;
+    const totalTokens = typeof usage.totalTokens === 'number' ? usage.totalTokens : undefined;
+    if (
+      typeof inputTokens !== 'number' ||
+      typeof outputTokens !== 'number' ||
+      typeof totalTokens !== 'number'
+    ) {
+      return undefined;
+    }
+
+    const promptTokens = typeof usage.promptTokens === 'number' ? usage.promptTokens : undefined;
+    const completionTokens = typeof usage.completionTokens === 'number' ? usage.completionTokens : undefined;
+    const cachedInputTokens = typeof usage.cachedInputTokens === 'number' ? usage.cachedInputTokens : undefined;
+    const reasoningOutputTokens = typeof usage.reasoningOutputTokens === 'number' ? usage.reasoningOutputTokens : undefined;
+
+    return {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      ...(typeof promptTokens === 'number' ? { promptTokens } : {}),
+      ...(typeof completionTokens === 'number' ? { completionTokens } : {}),
+      ...(typeof cachedInputTokens === 'number' ? { cachedInputTokens } : {}),
+      ...(typeof reasoningOutputTokens === 'number' ? { reasoningOutputTokens } : {}),
+    };
+  }
+
+  async getSessionFiles(id: string) {
+    return filterSessionFilesForResponse(await this.sandboxManager.listFiles(id));
+  }
+
+  async getSkills() {
+    return listLocalSkillNames();
+  }
+
+  async getSessionFileContent(id: string, filePath: string) {
+    return normalizeSessionFileContent(await this.sandboxManager.readFile(id, filePath));
+  }
+
+
+  async getEvents(request: Request, response: Response, id: string) {
+    const conversation = await this.conversationModel.findOne({ id });
+    if (!conversation?.head) {
+      response.status(404);
+      return;
+    }
+
+    this.enableStream(request, response);
+    const ac = new AbortController();
+    const ws = new PassThrough();
+    const head = conversation.head;
+    (async () => {
+      try {
+        const stream = this.events.getStream(id, head, ac.signal);
+        for await (const chunk of stream) {
+          ws.write(JSON.stringify(this.toClientEvent(chunk as unknown as Record<string, unknown>)) + '\n');
+        }
+      } catch (error) {
+        this.logger.error({ conversationId: id, error }, 'Failed to stream chat history');
+      } finally {
+        ws.end();
+      }
+    })();
+    request.on('close', ac.abort.bind(ac));
+    response.status(200);
+    return ws;
+  }
+
+  async chat(
+    request: Request,
+    response: Response,
+    dto: ChatDto,
+  ) {
+    let { model, id, text, attachments } = dto;
+    const resume = normalizeResumePayload(dto);
+
+    this.enableStream(request, response);
+    const ac = new AbortController();
+    const ws = new PassThrough();
+
+    let conversation: Conversation | null | undefined;
+    if (!id) {
+      id = randomUUID();
+      ws.write(JSON.stringify({ event: 'conversation-create', data: { conversationId: id } }) + '\n');
+      await this.conversationModel.create({ id, topic: text, modelName: model });
+    } else {
+      conversation = await this.conversationModel.findOne({ id });
+      if (conversation?.modelName) {
+        model = conversation.modelName;
+      }
+      // generating检查
+      const generating = await this.conversation.isGenerating(id);
+      if (generating) {
+        response.status(409);
+        return;
+      }
+    }
+
+    if (!model) {
+      throw new BadRequestException('model 不能为空');
+    }
+
+    const save = await this.createEventsSaver(id);
+
+    let query: string | Command | undefined;
+
+    // 新问题
+    if (text) {
+      const normalizedText = normalizeSlashSkillMentions(text, await this.getSkills());
+      query = '';
+      // 附件（如果有）
+      if (attachments?.length) {
+        query += '<attachments>\n';
+        query += attachments.map(it => JSON.stringify(it)).join('\n');
+        query += '\n</attachments>\n';
+      }
+      query += normalizedText;
+      query = query.trim();
+      // 保存用户的问题和附件
+      await save({
+        id: randomUUID(),
+        event: 'user',
+        data: { text, attachments },
+        timestamp: Date.now(),
+      });
+    }
+
+    // 信息补充
+    if (resume) {
+      const resumeValue = resume.interruptId ? { [resume.interruptId]: resume.answer } : resume.answer;
+      query = new Command({ resume: resumeValue });
+      await save({
+        id: randomUUID(),
+        event: 'set-generative-ui-answer',
+        data: resume,
+        timestamp: Date.now(),
+      });
+
+      if (typeof resume.answer === 'string') {
+        await save({
+          id: randomUUID(),
+          event: 'user',
+          data: { text: resume.answer, attachments: [] },
+          timestamp: Date.now(),
+        });
+      }
+    }
+
+    if (!query) {
+      throw new BadRequestException('请求体必须提供 text，或提供合法的 resume / requirements');
+    }
+
+    const generator = this.graph.run(query, {
+      conversation_id: id,
+      model,
+      signal: ac.signal,
+      request
+    });
+    this.pipe(id, generator, ws, ac, save);
+    response.status(200);
+    return ws;
+  }
+
+  // 返回对应conversation_id的savor
+  // savor的作用是，通过队列保存chunk，在chunk id一样时覆写，并且构造链表
+  // 在conversation中保存head和tail，head为了获取整个链表，tail为了继续写入新的链表节点
+  private async createEventsSaver(id: string) {
+    const enqueue = this.createQueuedExecutor();
+    const conversation = await this.conversationModel.findOne({ id });
+    // 获取对话的最后一个节点的内容
+    let buffer: ILinkedEvent | null | undefined = conversation?.tail
+      ? await this.events.getTail(id, conversation.tail)
+      : null;
+
+    return async (chunk?: ILinkedEvent) => {
+      // 保存后续传入的内容
+      if (buffer) {
+        const diff = chunk?.id !== buffer.id;
+
+        if (diff) {
+          // 指向下一个节点
+          buffer.next_id = chunk?.id;
+        }
+
+        // 保存引用，用在闭包里，避免后面改写引用导致存入的内容丢失
+        const snapshot = buffer;
+        // 串行写入。流式事件可能很密集，直接并发 events.set 可能导致顺序错乱或覆盖。队列保证一次只处理一个任务。
+        enqueue({
+          key: buffer.id,
+          func: retry(() => this.events.set(id, snapshot), { interval: 300 }),
+        });
+
+        if (diff) {
+          const partial: Partial<Conversation> = { tail: buffer.id };
+          if (buffer.node && TalkableAgents.includes(buffer.node)) {
+            partial.node = buffer.node;
+          }
+          await this.conversationModel.updateOne({ id }, partial);
+          buffer = chunk;
+        }
+      } else if (chunk) {
+        buffer = chunk;
+        // 仅在对话没有 head 时才记录（避免因 Redis 丢失 tail 数据时覆盖已有的历史链）
+        if (!conversation?.head) {
+          await this.conversationModel.updateOne({ id }, { head: chunk.id });
+        }
+      }
+    };
+  }
+
+  // 队列写入
+  private createQueuedExecutor() {
+    interface IAction {
+      key: string;
+      func: () => Promise<void>;
+    }
+
+    const queue: IAction[] = [];
+    let loading = false;
+
+    const dequeue = () => {
+      loading = true;
+      const action = queue.shift();
+      if (action) {
+        // 递归调用出队，确保每个任务都能被执行
+        action.func().finally(dequeue);
+      } else {
+        loading = false;
+      }
+    };
+
+    const enqueue = (action: IAction) => {
+      // 如果队列中有对应的任务，则替换func为新的func
+      const existed = queue.find(it => it.key === action.key);
+      if (existed) {
+        existed.func = action.func;
+        return;
+      }
+      // 如果没有任务，则直接加入队列
+      queue.push(action);
+      // 如果不处在loading态（没有进行中的任务，则开始出队）
+      if (!loading) {
+        dequeue();
+      }
+    };
+
+    return enqueue;
+  }
+
+  // 分片聚合，如果是一连串同类型的chunk，则id始终都是这串的第一个chunk的id，但是内容一直拼接。
+  private createChunkAggregator() {
+    // 上一个事件
+    let latest: IGraphEvent | undefined;
+    const concat = (a: string | undefined | null, b: string | undefined | null) => (a && b ? a + b : a || b);
+    const getSourceKey = (event?: IGraphEvent) => event?.subagent_namespace || 'main';
+
+    return (chunk: IGraphEvent) => {
+      // 连续 assistant 分片同节点则合并 thinking 与 content ，避免存储碎片过多
+      if (
+        chunk.event === 'assistant' &&
+        latest?.event === 'assistant' &&
+        chunk.node === latest.node &&
+        getSourceKey(chunk) === getSourceKey(latest)
+      ) {
+        // @ts-expect-error: type todo
+        latest.data.thinking = concat(latest.data.thinking, chunk.data.thinking);
+        // @ts-expect-error: type todo
+        latest.data.content = concat(latest.data.content, chunk.data.content);
+        return latest;
+      }
+
+      // 连续 tool-input 同工具名则拼接输入文本
+      if (
+        chunk.event === 'tool-input' &&
+        latest?.event === 'tool-input' &&
+        getSourceKey(chunk) === getSourceKey(latest) &&
+        // @ts-expect-error: type todo
+        chunk.data.name === latest.data.name
+      ) {
+        // @ts-expect-error: type todo
+        latest.data.input = latest.data.input + chunk.data.input;
+        return latest;
+      }
+
+      latest = chunk;
+      return chunk;
+    };
+  }
+
+  private async pipe(
+    id: string,
+    generator: AsyncGenerator<IGraphEvent>,
+    response: PassThrough,
+    ac: AbortController,
+    save: (chunk?: ILinkedEvent) => Promise<void>,
+  ) {
+    const aggregate = this.createChunkAggregator();
+    const send = async (chunk: ILinkedEvent) => {
+      const tokenUsage = this.extractTokenUsageFromAssistantEnd(chunk);
+      if (tokenUsage) {
+        await this.conversationModel.updateOne({ id }, { tokenUsage });
+      }
+
+      // 这里在保存的时候，会因为aggregate的累加机制，使得id不变，但是内容不断累加
+      await save(aggregate(chunk as IGraphEvent));
+
+      if (!response.destroyed) {
+        const payload = this.toClientEvent(chunk as unknown as Record<string, unknown>);
+        return new Promise<void>((resolve, reject) =>
+          response.write(`${JSON.stringify(payload)}\n`, error => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          }),
+        );
+      }
+    };
+
+    const writeKeepAlive = () => {
+      if (!response.destroyed) {
+        response.write('\n');
+      }
+    };
+
+    try {
+      await this.conversation.start(id);
+
+      const keepAliveInterval = setInterval(writeKeepAlive, 15_000);
+      try {
+        for await (const chunk of generator) {
+          await this.checkAborted(id, ac);
+          await send(chunk);
+        }
+      } finally {
+        clearInterval(keepAliveInterval);
+      }
+      await send({ id: randomUUID(), event: 'end', timestamp: Date.now() });
+    } catch (error) {
+      const message = formatError(error);
+      const causeChain = getErrorCauseChain(error);
+      this.logger.error({
+        conversationId: id,
+        message,
+        causeChain,
+        rootCause: causeChain[causeChain.length - 1],
+        aborted: ac.signal.aborted,
+      }, 'Chat stream failed');
+      await send({ id: randomUUID(), event: 'error', data: message, timestamp: Date.now() });
+    } finally {
+      save();
+      response.end();
+      await this.conversation.stop(id);
+    }
+  }
+
+  private async checkAborted(id: string, ac: AbortController) {
+    const generating = await this.conversation.isGenerating(id);
+    if (generating) {
+      await this.conversation.chunk(id);
+    } else {
+      ac.abort();
+      // compatible with abort error message of langgraph
+      throw new Error('Aborted');
+    }
+  }
+
+  private enableStream(request: Request, response: Response) {
+    request.socket.setTimeout(0);
+    request.socket.setNoDelay();
+    request.socket.setKeepAlive(true);
+    response.setHeader('content-type', 'text/plain; charset=utf-8');
+    response.setHeader('cache-control', 'no-cache');
+    response.setHeader('connection', 'keep-alive');
+  }
+}

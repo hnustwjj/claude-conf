@@ -1,0 +1,18 @@
+{
+  "claude-plugins-official": {
+    "source": {
+      "source": "github",
+      "repo": "anthropics/claude-plugins-official"
+    },
+    "installLocation": "/Users/bytedance/.claude/plugins/marketplaces/claude-plugins-official",
+    "lastUpdated": "2026-03-28T17:06:26.589Z"
+  },
+  "claude-hud": {
+    "source": {
+      "source": "github",
+      "repo": "jarrodwatts/claude-hud"
+    },
+    "installLocation": "/Users/bytedance/.claude/plugins/marketplaces/claude-hud",
+    "lastUpdated": "2026-03-20T08:49:26.116Z"
+  }
+}

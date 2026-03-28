@@ -1,0 +1,273 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Sidebar } from '@/components/Sidebar';
+import { useChat } from '@/hooks/useChat';
+import { ChatHeader } from '@/components/chat/ChatHeader';
+import { EmptyState } from '@/components/chat/EmptyState';
+import { MessageList } from '@/components/chat/MessageList';
+import { ChatInput } from '@/components/chat/ChatInput';
+import { MessageSkeleton } from '@/components/chat/MessageSkeleton';
+import { CodeDetailPanel } from '@/components/chat/CodeDetailPanel';
+import { SubagentDetailPanel } from '@/components/chat/SubagentDetailPanel';
+import { shouldShowCodeDetailPanel } from '@/components/chat/codeDetailPanelUtils';
+import { buildSubagentDetailPanelState } from '@/components/chat/subagentDetailPanelUtils';
+import { cn } from '@/lib/utils';
+import { getSessionFiles, getSkills } from '@/lib/api';
+
+export default function ChatPage() {
+  const {
+    conversations,
+    messages,
+    todoTree,
+    input,
+    isLoading,
+    isHistoryLoading,
+    currentId,
+    sidebarOpen,
+    availableModels,
+    selectedModel,
+    tokenUsage,
+    modelContextWindows,
+    setInput,
+    setSidebarOpen,
+    setCurrentId,
+    setSelectedModel,
+    handleSend,
+    handleDelete,
+    handleAskUserSubmit,
+    scrollRef
+  } = useChat();
+  const [selectedDetailMessageId, setSelectedDetailMessageId] = useState<string | undefined>();
+  const [selectedSubagentKey, setSelectedSubagentKey] = useState<string | undefined>();
+  const [sessionFiles, setSessionFiles] = useState<string[]>([]);
+  const [skills, setSkills] = useState<string[]>([]);
+  const [isXlUp, setIsXlUp] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1280px)').matches : false,
+  );
+  const lastAutoFollowDetailIdRef = useRef<string | undefined>();
+  const lastSessionRefreshKeyRef = useRef<string | undefined>();
+
+  const latestDetailMessage = useMemo(
+    () => [...messages].reverse().find(message => !!message.toolDetail),
+    [messages],
+  );
+
+  const selectedDetailMessage = useMemo(
+    () => messages.find(message => message.id === selectedDetailMessageId && !!message.toolDetail) || latestDetailMessage,
+    [messages, selectedDetailMessageId, latestDetailMessage],
+  );
+  const selectedSubagentState = useMemo(
+    () => buildSubagentDetailPanelState(messages, selectedSubagentKey),
+    [messages, selectedSubagentKey],
+  );
+
+  const refreshSessionFiles = useCallback(async (conversationId: string, cancelled?: () => boolean) => {
+    try {
+      const files = await getSessionFiles(conversationId);
+      if (!cancelled?.()) {
+        setSessionFiles(files);
+      }
+    } catch {
+      if (!cancelled?.()) {
+        setSessionFiles([]);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const nextSkills = await getSkills();
+        if (!cancelled) {
+          setSkills(nextSkills);
+        }
+      } catch {
+        if (!cancelled) {
+          setSkills([]);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(min-width: 1280px)');
+    const update = () => setIsXlUp(mediaQuery.matches);
+    update();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', update);
+      return () => mediaQuery.removeEventListener('change', update);
+    }
+
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentId) {
+      setSessionFiles([]);
+      lastSessionRefreshKeyRef.current = undefined;
+      return () => { cancelled = true; };
+    }
+
+    setSessionFiles([]);
+    refreshSessionFiles(currentId, () => cancelled);
+
+    return () => { cancelled = true; };
+  }, [currentId, refreshSessionFiles]);
+
+  useEffect(() => {
+    const detail = latestDetailMessage?.toolDetail;
+    const latestDetailMessageId = latestDetailMessage?.id;
+    if (!currentId || !latestDetailMessageId || detail?.kind !== 'write_file' || detail.status !== 'completed') {
+      return;
+    }
+
+    const refreshKey = `${currentId}:${latestDetailMessageId}:${detail.status}`;
+    if (lastSessionRefreshKeyRef.current === refreshKey) {
+      return;
+    }
+    lastSessionRefreshKeyRef.current = refreshKey;
+
+    void refreshSessionFiles(currentId);
+  }, [currentId, latestDetailMessage, refreshSessionFiles]);
+
+  useEffect(() => {
+    if (!latestDetailMessage) {
+      lastAutoFollowDetailIdRef.current = undefined;
+      setSelectedDetailMessageId(undefined);
+      return;
+    }
+    if (lastAutoFollowDetailIdRef.current !== latestDetailMessage.id) {
+      lastAutoFollowDetailIdRef.current = latestDetailMessage.id;
+      setSelectedDetailMessageId(latestDetailMessage.id);
+    }
+  }, [latestDetailMessage]);
+
+  useEffect(() => {
+    if (!currentId) {
+      setSelectedSubagentKey(undefined);
+    }
+  }, [currentId]);
+
+  useEffect(() => {
+    if (selectedSubagentKey && !selectedSubagentState) {
+      setSelectedSubagentKey(undefined);
+    }
+  }, [selectedSubagentKey, selectedSubagentState]);
+
+  const shouldShowSubagentPanel = isXlUp && !!selectedSubagentState;
+  const shouldShowDetailPanel = !shouldShowSubagentPanel && shouldShowCodeDetailPanel(sessionFiles, selectedDetailMessage);
+
+  const composerTokenUsage = useMemo(() => {
+    const capacity = modelContextWindows[selectedModel] || 0;
+    const used = tokenUsage?.inputTokens || 0;
+    return { used, capacity };
+  }, [modelContextWindows, selectedModel, tokenUsage]);
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <Sidebar
+        conversations={conversations}
+        currentId={currentId}
+        onSelect={setCurrentId}
+        onNewChat={() => setCurrentId(undefined)}
+        onDelete={handleDelete}
+        isOpen={sidebarOpen}
+        toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+      />
+
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        <ChatHeader
+          currentId={currentId}
+          conversations={conversations}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        />
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="h-full">
+                {messages.length === 0 && !isLoading && !currentId ? (
+                  <div className="animate-in fade-in zoom-in-95 duration-500">
+                    <EmptyState />
+                  </div>
+                ) : (
+                  <div className="relative min-h-full">
+                    <div
+                      key={currentId || 'new'}
+                      className={cn(
+                        'transition-opacity duration-500',
+                        isHistoryLoading ? 'opacity-0 pointer-events-none' : 'opacity-100',
+                      )}
+                    >
+                      <MessageList
+                        messages={messages}
+                        isLoading={isLoading}
+                        onAskUserSubmit={handleAskUserSubmit}
+                        scrollRef={scrollRef}
+                        selectedDetailMessageId={selectedDetailMessageId}
+                        selectedSubagentKey={selectedSubagentKey}
+                        onSelectToolDetail={messageId => {
+                          setSelectedSubagentKey(undefined);
+                          setSelectedDetailMessageId(messageId);
+                        }}
+                        onSelectSubagent={subagentKey => {
+                          setSelectedDetailMessageId(undefined);
+                          setSelectedSubagentKey(subagentKey);
+                        }}
+                      />
+                    </div>
+
+                    <div className={cn(
+                      'absolute inset-0 bg-background z-10 transition-opacity duration-500',
+                      isHistoryLoading ? 'opacity-100' : 'opacity-0 pointer-events-none',
+                    )}>
+                      <MessageSkeleton />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <ChatInput
+              input={input}
+              isLoading={isLoading}
+              todoTree={todoTree}
+              skills={skills}
+              availableModels={availableModels}
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
+              modelSelectionDisabled={isLoading || !!currentId}
+              tokenUsage={composerTokenUsage}
+              onInputChange={setInput}
+              onSend={handleSend}
+            />
+          </div>
+
+          {shouldShowSubagentPanel && (
+            <SubagentDetailPanel
+              state={selectedSubagentState}
+              isLoading={isLoading}
+              selectedDetailMessageId={selectedDetailMessageId}
+              onAskUserSubmit={handleAskUserSubmit}
+              onClose={() => setSelectedSubagentKey(undefined)}
+              onSelectToolDetail={messageId => {
+                setSelectedSubagentKey(undefined);
+                setSelectedDetailMessageId(messageId);
+              }}
+            />
+          )}
+
+          {shouldShowDetailPanel && isXlUp && (
+            <CodeDetailPanel conversationId={currentId} message={selectedDetailMessage} sessionFiles={sessionFiles} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

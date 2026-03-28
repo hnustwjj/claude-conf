@@ -1,0 +1,166 @@
+export interface Conversation {
+  id: string;
+  topic: string;
+  model: string;
+  createdAt: number;
+  generating: boolean;
+}
+
+export interface ChatEvent {
+  id?: string;
+  event:
+    | 'user'
+    | 'assistant'
+    | 'thinking'
+    | 'interrupt'
+    | 'set-ask-user'
+    | 'error'
+    | 'end'
+    | 'tool-input'
+    | 'conversation-create'
+    | 'tool-output'
+    | 'tool-call'
+    | 'tool-call-result'
+    | 'deliver'
+    | 'agent-start'
+    | 'agent-end'
+    | 'assistant-start'
+    | 'assistant-end'
+    | 'context-summarized'
+    | 'todo-update';
+  data?: unknown;
+  timestamp?: number;
+  node?: string;
+  subagentType?: string;
+  subagentNamespace?: string;
+  source?: StreamSource;
+}
+
+export type StreamSourceKind = 'main' | 'subagent';
+
+export interface StreamSource {
+  kind: StreamSourceKind;
+  key: string;
+  label?: string;
+  namespace?: string[];
+}
+
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface SubagentTodoGroup {
+  key: string;
+  label: string;
+  todos: TodoItem[];
+}
+
+export interface TodoTreeItem extends TodoItem {
+  children: SubagentTodoGroup[];
+}
+
+export type ToolDetailKind = 'write_file' | 'execute';
+
+export type ToolDetailStatus = 'streaming' | 'running' | 'completed' | 'error';
+
+export interface ToolDetail {
+  kind: ToolDetailKind;
+  title: string;
+  summary: string;
+  status: ToolDetailStatus;
+  language?: string;
+  code?: string;
+  output?: string;
+  filePath?: string;
+}
+
+export interface Message {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  event?: ChatEvent['event'];
+  toolName?: string;
+  toolCallId?: string;
+  thinking?: string;
+  attachments?: unknown[];
+  submittedValues?: Record<string, unknown>;
+  node?: string;
+  outputLength?: number;
+  isError?: boolean;
+  todos?: TodoItem[];
+  askUser?: AskUserMessage;
+  toolDetail?: ToolDetail;
+  tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  subagentType?: string;
+  subagentNamespace?: string;
+  source?: StreamSource;
+}
+
+export interface AskUserOption {
+  label: string;
+  value: string;
+}
+
+interface AskUserFieldBase {
+  key: string;
+  label: string;
+  required?: boolean;
+}
+
+export interface AskUserTextField extends AskUserFieldBase {
+  type: 'text';
+  placeholder?: string;
+  minLength?: number;
+  maxLength?: number;
+}
+
+export interface AskUserNumberField extends AskUserFieldBase {
+  type: 'number';
+  placeholder?: string;
+  min?: number;
+  max?: number;
+}
+
+export interface AskUserRadioField extends AskUserFieldBase {
+  type: 'radio';
+  options: AskUserOption[];
+  inspiration?: string;
+}
+
+export interface AskUserCheckboxField extends AskUserFieldBase {
+  type: 'checkbox';
+  options: AskUserOption[];
+  inspiration?: string;
+}
+
+export type AskUserField = AskUserTextField | AskUserNumberField | AskUserRadioField | AskUserCheckboxField;
+
+export interface AskUserChatPayload {
+  kind: 'chat';
+  interruptId?: string;
+  question: string;
+  agent?: string;
+}
+
+export interface AskUserFormPayload {
+  kind: 'form';
+  interruptId?: string;
+  title: string;
+  fields: AskUserField[];
+  agent?: string;
+}
+
+export type AskUserPayload = AskUserChatPayload | AskUserFormPayload;
+
+export type AskUserMessage = AskUserPayload & {
+  answer?: string | Record<string, unknown>;
+  isPreview?: boolean;
+  readonly?: boolean;
+};
+
+export interface ResumePayload {
+  interruptId?: string;
+  answer: string | Record<string, unknown>;
+}

@@ -1,0 +1,236 @@
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js:1:import { wrapOpenAIClientError } from "./utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-2-import { getEndpoint, getHeadersWithUserAgent } from "./utils/azure.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-3-import { OpenAI } from "openai";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-4-import { GenerationChunk } from "@langchain/core/outputs";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-271-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-272-				return await this.client.completions.create(request, requestOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-273-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js:274:				throw wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-275-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-276-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js-277-	}
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-11-import { AzureOpenAI } from "./azure/llms.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-12-import { OpenAIEmbeddingModelId, OpenAIEmbeddings, OpenAIEmbeddingsParams } from "./embeddings.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-13-import { AzureOpenAIEmbeddings } from "./azure/embeddings.js";
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts:14:import { wrapOpenAIClientError } from "./utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-15-import { HeadersLike, OpenAIEndpointConfig, getEndpoint, getFormattedEnv, getHeadersWithUserAgent, isHeaders, normalizeHeaders } from "./utils/azure.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-16-import { DallEAPIWrapper, DallEAPIWrapperParams, OpenAIImageModelId } from "./tools/dalle.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-17-import { WebSearchFilters, WebSearchOptions, WebSearchTool } from "./tools/webSearch.js";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-31-import { completionsApiContentBlockConverter, convertCompletionsDeltaToBaseMessageChunk, convertCompletionsMessageToBaseMessage, convertMessagesToCompletionsMessageParams, convertStandardContentBlockToCompletionsContentPart, convertStandardContentMessageToCompletionsMessage } from "./converters/completions.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-32-import { ResponsesCreate, ResponsesCreateInvoke, ResponsesInputItem, ResponsesParse, ResponsesParseInvoke, convertMessagesToResponsesInput, convertReasoningSummaryToResponsesReasoningItem, convertResponsesDeltaToChatGenerationChunk, convertResponsesMessageToAIMessage, convertResponsesUsageToUsageMetadata, convertStandardContentMessageToResponsesInput } from "./converters/responses.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts-33-import { ClientOptions, OpenAI as OpenAIClient, toFile } from "openai";
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.ts:34:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js:1:import { wrapOpenAIClientError } from "./utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-2-import { getEndpoint, getHeadersWithUserAgent } from "./utils/azure.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-3-import { OpenAI } from "openai";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-4-import { getEnvironmentVariable } from "@langchain/core/utils/env";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-128-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-129-				return await this.client.embeddings.create(request, requestOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-130-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js:131:				throw wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-132-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-133-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js-134-	}
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs-271-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs-272-				return await this.client.completions.create(request, requestOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs-273-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs:274:				throw require_client.wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs-275-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs-276-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs-277-	}
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.cjs.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.js.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js:1:import { wrapOpenAIClientError } from "../utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-2-import { convertCompletionsCustomTool, formatToOpenAIToolChoice, isBuiltInTool, isBuiltInToolChoice, isCustomTool, isOpenAICustomTool } from "../utils/tools.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-3-import { BaseChatOpenAI, getChatOpenAIModelParams } from "./base.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-4-import { convertMessagesToResponsesInput, convertResponsesDeltaToChatGenerationChunk, convertResponsesMessageToAIMessage } from "../converters/responses.js";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-157-				if (request.text?.format?.type === "json_schema" && !request.stream) return await this.client.responses.parse(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-158-				return await this.client.responses.create(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-159-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js:160:				throw wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-161-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-162-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js-163-	}
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.js.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs.map:1:[Omitted long matching line]
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.cjs-66-	}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.cjs-67-});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.cjs-68-exports.tools = require_index$2.tools;
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.cjs:69:exports.wrapOpenAIClientError = require_client.wrapOpenAIClientError;
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs-224-				if (isParseableFormat && !request.stream) return await this.client.chat.completions.parse(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs-225-				else return await this.client.chat.completions.create(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs-226-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs:227:				throw require_client.wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs-228-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs-229-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.cjs-230-	}
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js:1:import { wrapOpenAIClientError } from "../utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-2-import { formatToOpenAIToolChoice } from "../utils/tools.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-3-import { isReasoningModel } from "../utils/misc.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-4-import { BaseChatOpenAI, getChatOpenAIModelParams } from "./base.js";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-224-				if (isParseableFormat && !request.stream) return await this.client.chat.completions.parse(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-225-				else return await this.client.chat.completions.create(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-226-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js:227:				throw wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-228-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-229-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js-230-	}
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js:1:import { wrapOpenAIClientError } from "../utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-2-import { _convertToOpenAITool, convertResponsesCustomTool, formatFunctionDefinitions, hasProviderToolDefinition, isBuiltInTool, isCustomTool } from "../utils/tools.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-3-import { isReasoningModel, messageToOpenAIRole } from "../utils/misc.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-4-import { getEndpoint, getHeadersWithUserAgent } from "../utils/azure.js";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-444-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-445-				return await this.client.moderations.create(moderationRequest, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-446-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js:447:				throw wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-448-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-449-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js-450-	}
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs-157-				if (request.text?.format?.type === "json_schema" && !request.stream) return await this.client.responses.parse(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs-158-				return await this.client.responses.create(request, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs-159-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs:160:				throw require_client.wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs-161-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs-162-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs-163-	}
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs-128-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs-129-				return await this.client.embeddings.create(request, requestOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs-130-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs:131:				throw require_client.wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs-132-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs-133-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/embeddings.cjs-134-	}
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/responses.cjs.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/llms.js.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js:1:import { wrapOpenAIClientError } from "./utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js-2-import { messageToOpenAIRole } from "./utils/misc.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js-3-import { getEndpoint, getFormattedEnv, getHeadersWithUserAgent, isHeaders, normalizeHeaders } from "./utils/azure.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js-4-import { BaseChatOpenAI } from "./chat_models/base.js";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js-20-import { convertPromptToOpenAI } from "./utils/prompts.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js-21-import "./converters/index.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js-22-import { OpenAI as OpenAIClient, toFile } from "openai";
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.js:23:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.js.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/completions.js.map:1:[Omitted long matching line]
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs-64-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs-65-				return await this.client.embeddings.create(request, requestOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs-66-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs:67:				throw require_client.wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs-68-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs-69-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs-70-	}
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs-444-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs-445-				return await this.client.moderations.create(moderationRequest, clientOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs-446-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs:447:				throw require_client.wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs-448-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs-449-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/chat_models/base.cjs-450-	}
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-11-import { AzureOpenAI } from "./azure/llms.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-12-import { OpenAIEmbeddingModelId, OpenAIEmbeddings, OpenAIEmbeddingsParams } from "./embeddings.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-13-import { AzureOpenAIEmbeddings } from "./azure/embeddings.cjs";
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts:14:import { wrapOpenAIClientError } from "./utils/client.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-15-import { HeadersLike, OpenAIEndpointConfig, getEndpoint, getFormattedEnv, getHeadersWithUserAgent, isHeaders, normalizeHeaders } from "./utils/azure.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-16-import { DallEAPIWrapper, DallEAPIWrapperParams, OpenAIImageModelId } from "./tools/dalle.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-17-import { WebSearchFilters, WebSearchOptions, WebSearchTool } from "./tools/webSearch.cjs";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-31-import { completionsApiContentBlockConverter, convertCompletionsDeltaToBaseMessageChunk, convertCompletionsMessageToBaseMessage, convertMessagesToCompletionsMessageParams, convertStandardContentBlockToCompletionsContentPart, convertStandardContentMessageToCompletionsMessage } from "./converters/completions.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-32-import { ResponsesCreate, ResponsesCreateInvoke, ResponsesInputItem, ResponsesParse, ResponsesParseInvoke, convertMessagesToResponsesInput, convertReasoningSummaryToResponsesReasoningItem, convertResponsesDeltaToChatGenerationChunk, convertResponsesMessageToAIMessage, convertResponsesUsageToUsageMetadata, convertStandardContentMessageToResponsesInput } from "./converters/responses.cjs";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts-33-import { ClientOptions, OpenAI as OpenAIClient, toFile } from "openai";
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/index.d.cts:34:[Omitted long matching line]
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.cts-1-//#region src/utils/client.d.ts
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.cts:2:declare function wrapOpenAIClientError(e: unknown): any;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.cts-3-//#endregion
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.cts:4:export { wrapOpenAIClientError };
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.cts-5-//# sourceMappingURL=client.d.cts.map
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js:1:import { wrapOpenAIClientError } from "../utils/client.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-2-import { getEndpoint, getHeadersWithUserAgent } from "../utils/azure.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-3-import { OpenAIEmbeddings } from "../embeddings.js";
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-4-import { AzureOpenAI } from "openai";
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-64-			try {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-65-				return await this.client.embeddings.create(request, requestOptions);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-66-			} catch (e) {
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js:67:				throw wrapOpenAIClientError(e);
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-68-			}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-69-		});
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js-70-	}
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.js.map:1:[Omitted long matching line]
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/azure/embeddings.cjs.map:1:[Omitted long matching line]
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-7-	if ("message" in e && typeof e.message === "string" && (e.message.includes("Input tokens exceed the configured limit") || e.message.includes("exceeds the context window"))) return true;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-8-	return false;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-9-}
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js:10:function wrapOpenAIClientError(e) {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-11-	if (!e || typeof e !== "object") return e;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-12-	let error;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-13-	if (e.constructor.name === APIConnectionTimeoutError.name && "message" in e && typeof e.message === "string") {
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-25-	return error;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-26-}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-27-//#endregion
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js:28:export { wrapOpenAIClientError };
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-29-
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.js-30-//# sourceMappingURL=client.js.map
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.ts-1-//#region src/utils/client.d.ts
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.ts:2:declare function wrapOpenAIClientError(e: unknown): any;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.ts-3-//#endregion
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.ts:4:export { wrapOpenAIClientError };
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.d.ts-5-//# sourceMappingURL=client.d.ts.map
+--
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs.map:1:[Omitted long matching line]
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-7-	if ("message" in e && typeof e.message === "string" && (e.message.includes("Input tokens exceed the configured limit") || e.message.includes("exceeds the context window"))) return true;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-8-	return false;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-9-}
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs:10:function wrapOpenAIClientError(e) {
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-11-	if (!e || typeof e !== "object") return e;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-12-	let error;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-13-	if (e.constructor.name === openai.APIConnectionTimeoutError.name && "message" in e && typeof e.message === "string") {
+--
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-25-	return error;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-26-}
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-27-//#endregion
+node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs:28:exports.wrapOpenAIClientError = wrapOpenAIClientError;
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-29-
+/Users/bytedance/Desktop/code/multi-agent-demo/multi-agent/node_modules/.pnpm/@langchain+openai@1.3.0_@langchain+core@1.1.34_openai@6.27.0_zod@4.3.6__/node_modules/@langchain/openai/dist/utils/client.cjs-30-//# sourceMappingURL=client.cjs.map

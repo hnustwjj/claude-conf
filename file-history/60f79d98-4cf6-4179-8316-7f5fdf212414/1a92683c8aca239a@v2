@@ -1,0 +1,7 @@
+import { Module } from '@nestjs/common';
+import { AgentUITestController } from './agent-ui-test.controller';
+
+@Module({
+  controllers: [AgentUITestController],
+})
+export class AgentUITestModule {}

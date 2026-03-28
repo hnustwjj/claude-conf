@@ -1,0 +1,171 @@
+import { Body, Controller, Post, Res } from '@nestjs/common';
+import { Response } from 'express';
+import { PassThrough } from 'stream';
+import { randomUUID } from 'crypto';
+import { createAgent, createMiddleware } from 'langchain';
+import { MemorySaver } from '@langchain/langgraph';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { isAIMessageChunk } from '@langchain/core/messages';
+import type { AIMessageChunk } from '@langchain/core/messages';
+import { getModel, EModelName } from '../../config/model';
+import { renderUITool } from '../../agents/tools/render-ui.tool';
+import { catalog } from '../../agents/generative-ui/catalog';
+import type { IGenerativeUIPayload } from '../../common/generative-ui';
+
+const SYSTEM_PROMPT = `你是一个 UI 生成助手。用户会描述想要的界面，你需要使用 render-ui 工具来生成对应的 UI 组件。
+
+规则：
+1. 收到用户请求后，直接调用 render-ui 工具生成 UI，不要用 markdown 描述
+2. 使用 json-render spec 的 flat-map 格式（root + elements + state）
+3. 展示类 UI 用 interactive=false，需要用户输入的表单用 interactive=true
+4. 调用 render-ui 后，只需一句简短引导语
+
+以下是可用的组件定义：
+${catalog.prompt()}`;
+
+const systemPromptMiddleware = createMiddleware({
+  name: 'AgentUITestSystemPrompt',
+  wrapModelCall: async (request, handler) => {
+    return handler({
+      ...request,
+      messages: [new SystemMessage(SYSTEM_PROMPT), ...request.messages],
+    });
+  },
+});
+
+interface AgentUITestDto {
+  prompt?: string;
+  threadId?: string;
+}
+
+@Controller('/api/agent-ui-test')
+export class AgentUITestController {
+  @Post('run')
+  async run(
+    @Body() body: AgentUITestDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    const prompt = body.prompt?.trim();
+    if (!prompt) {
+      res.status(400).json({ error: 'prompt is required' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const pass = new PassThrough();
+    pass.pipe(res);
+
+    const threadId = body.threadId || randomUUID();
+    const checkpointer = new MemorySaver();
+    const model = getModel(EModelName.DeepSeekChat);
+
+    const agent = createAgent({
+      model,
+      tools: [renderUITool],
+      middleware: [systemPromptMiddleware],
+      checkpointer,
+    });
+
+    function emit(event: Record<string, unknown>) {
+      pass.write(JSON.stringify(event) + '\n');
+    }
+
+    try {
+      const stream = agent.streamEvents(
+        { messages: [new HumanMessage(prompt)] },
+        {
+          version: 'v2' as const,
+          configurable: { thread_id: threadId },
+        },
+      );
+
+      for await (const streamEvent of stream) {
+        if (!streamEvent || typeof streamEvent !== 'object') continue;
+
+        const { event, name, data } = streamEvent as {
+          run_id: string;
+          name: string;
+          event: string;
+          data: Record<string, unknown>;
+        };
+
+        // Streaming text from the model
+        if (event === 'on_chat_model_stream') {
+          const chunk = data.chunk;
+          if (chunk && isAIMessageChunk(chunk as any)) {
+            const aiChunk = chunk as AIMessageChunk;
+            const text =
+              typeof aiChunk.content === 'string'
+                ? aiChunk.content
+                : '';
+
+            // Tool input streaming for render-ui preview
+            if (aiChunk.tool_call_chunks?.length) {
+              const toolChunk = aiChunk.tool_call_chunks[0];
+              const toolName = toolChunk.name || undefined;
+              if (toolName === 'render-ui' || (!toolName && toolChunk.args)) {
+                emit({
+                  event: 'tool-input',
+                  data: { name: 'render-ui', input: toolChunk.args || '' },
+                });
+              }
+              continue;
+            }
+
+            if (text) {
+              emit({ event: 'assistant', data: { content: text } });
+            }
+          }
+        }
+
+        // Non-interactive render-ui result (tool end with artifact)
+        if (event === 'on_tool_end' && name === 'render-ui') {
+          const output = data.output as { artifact?: unknown } | undefined;
+          const artifact = output?.artifact as {
+            title?: string;
+            spec?: Record<string, unknown>;
+          } | null;
+          if (artifact?.spec) {
+            emit({
+              event: 'generative-ui',
+              data: {
+                title: artifact.title || '',
+                spec: artifact.spec,
+                interactive: false,
+              },
+            });
+          }
+        }
+
+        // Interactive render-ui interrupt
+        if (event === 'on_chain_stream') {
+          const chunk = data.chunk as Record<string, unknown> | undefined;
+          const interrupts = chunk?.__interrupt__;
+          if (Array.isArray(interrupts) && interrupts.length > 0) {
+            const interrupt = interrupts[0] as { id?: string; value?: unknown };
+            const payload = interrupt?.value as IGenerativeUIPayload | undefined;
+            if (payload?.kind === 'generative-ui') {
+              emit({
+                event: 'generative-ui',
+                data: {
+                  interruptId: interrupt.id,
+                  title: payload.title,
+                  spec: payload.spec,
+                  interactive: true,
+                },
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emit({ event: 'error', data: { message } });
+    }
+
+    pass.end();
+  }
+}

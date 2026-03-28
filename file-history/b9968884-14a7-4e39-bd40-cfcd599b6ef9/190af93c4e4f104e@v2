@@ -1,0 +1,196 @@
+import { MemorySaver } from "@langchain/langgraph";
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { createMiddleware, DynamicStructuredTool } from "langchain";
+import { SystemMessage, ToolMessage } from "@langchain/core/messages";
+import { ContextOverflowError } from "@langchain/core/errors";
+import { createToolErrorMiddleware } from "../middleware/tool-error.middleware";
+import { ConversationSandboxManager } from '../sandbox/conversation-sandbox.manager';
+import { BaseLanguageModel } from "@langchain/core/language_models/base";
+import { SANDBOX_SKILLS_ROOT } from '../sandbox/sandbox-skills.config';
+import { configSchema } from "../../config/config.schema";
+import type { SandboxBackendProtocol } from "deepagents";
+import { createCustomDeepAgent } from "../core/create-deep-agent";
+
+const memory = new MemorySaver();
+
+const VFS_RELATIVE_PATH_PROMPT = `## Important: Use Relative Paths in Execute Tool
+
+The sandbox environment does NOT support absolute paths in shell commands.
+When using the \`execute\` tool, you MUST use **relative paths** (without leading \`/\`) for all file operations.
+
+For example:
+- CORRECT: \`execute(command="python -c \\"import json; f=open('large_tool_results/get_dashboard_by_uid:5'); data=json.load(f); print(data)\\\"")\`
+- WRONG: \`execute(command="python -c \\"import json; f=open('/large_tool_results/get_dashboard_by_uid:5'); data=json.load(f); print(data)\\\"")\`
+
+This applies to ALL file paths used inside execute commands, including paths to files in \`large_tool_results/\` and any other local files.
+Note: The filesystem tools (read_file, write_file, ls, etc.) still use absolute paths starting with \`/\` — this restriction only applies to the \`execute\` tool.`;
+
+/**
+ * Middleware that instructs the LLM to use relative paths in execute tool commands,
+ * because the VFS sandbox environment does not support absolute paths in shell execution.
+ */
+const vfsRelativePathMiddleware = createMiddleware({
+  name: 'VfsRelativePathMiddleware',
+  wrapModelCall: async (request, handler) => {
+    const additionalPrompt = new SystemMessage({ content: VFS_RELATIVE_PATH_PROMPT });
+    return handler({
+      ...request,
+      messages: [additionalPrompt, ...request.messages],
+    });
+  },
+});
+
+/**
+ * Middleware that catches "maximum context length" API errors from models
+ * that don't natively throw ContextOverflowError (e.g., DeepSeek).
+ *
+ * Without this, the deepagents summarization middleware's safety net
+ * (ContextOverflowError catch → emergency summarization) never triggers,
+ * causing unrecoverable 400 errors when token estimation undercounts.
+ */
+const contextOverflowBridgeMiddleware = createMiddleware({
+  name: 'ContextOverflowBridgeMiddleware',
+  wrapModelCall: async (request, handler) => {
+    try {
+      return await handler(request);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('maximum context length')) {
+        throw ContextOverflowError.fromError(
+          err instanceof Error ? err : new Error(message),
+        );
+      }
+      throw err;
+    }
+  },
+});
+
+/**
+ * Stricter threshold for evicting large tool results to filesystem.
+ * Default in deepagents SDK is 20000 tokens (80000 chars).
+ * We use 5000 tokens (20000 chars) to aggressively evict large MCP tool results
+ * (e.g., query_prometheus, get_dashboard_by_uid) that can return 60k-120k+ chars.
+ */
+const STRICT_TOOL_TOKEN_LIMIT = 5000;
+const NUM_CHARS_PER_TOKEN = 4;
+const STRICT_CHAR_LIMIT = STRICT_TOOL_TOKEN_LIMIT * NUM_CHARS_PER_TOKEN;
+
+/** Tools whose results should never be evicted (same as deepagents SDK). */
+const TOOLS_EXCLUDED_FROM_EVICTION = ['ls', 'glob', 'grep', 'read_file', 'edit_file', 'write_file'];
+
+function sanitizeToolCallId(toolCallId: string): string {
+  return toolCallId.replace(/\./g, '_').replace(/\//g, '_').replace(/\\/g, '_');
+}
+
+function createContentPreview(content: string, headLines = 5, tailLines = 5): string {
+  const lines = content.split('\n');
+  if (lines.length <= headLines + tailLines) {
+    return lines.map((line, i) => `${i + 1}\t${line.substring(0, 1000)}`).join('\n');
+  }
+  const head = lines.slice(0, headLines).map((line, i) => `${i + 1}\t${line.substring(0, 1000)}`).join('\n');
+  const truncation = `\n... [${lines.length - headLines - tailLines} lines truncated] ...\n`;
+  const tailStart = lines.length - tailLines + 1;
+  const tail = lines.slice(-tailLines).map((line, i) => `${tailStart + i}\t${line.substring(0, 1000)}`).join('\n');
+  return head + truncation + tail;
+}
+
+const TOO_LARGE_MSG = `Tool result too large, the result of this tool call {tool_call_id} was saved in the filesystem at this path: {file_path}
+You can read the result from the filesystem by using the read_file tool, but make sure to only read part of the result at a time.
+You can do this by specifying an offset and limit in the read_file tool call.
+For example, to read the first 100 lines, you can use the read_file tool with offset=0 and limit=100.
+
+Here is a preview showing the head and tail of the result (lines of the form
+... [N lines truncated] ...
+indicate omitted lines in the middle of the content):
+
+{content_sample}`;
+
+/**
+ * Creates a middleware that evicts large tool results to the VFS filesystem
+ * with a stricter threshold than the default deepagents SDK.
+ *
+ * Custom middleware runs innermost in the chain, so our eviction happens
+ * before the SDK's built-in filesystem middleware sees the result.
+ */
+function createStrictToolEvictionMiddleware(backend: SandboxBackendProtocol) {
+  return createMiddleware({
+    name: 'StrictToolEvictionMiddleware',
+    wrapToolCall: async (request, handler) => {
+      const toolName = request.toolCall?.name;
+      if (toolName && TOOLS_EXCLUDED_FROM_EVICTION.includes(toolName)) {
+        return handler(request);
+      }
+
+      const result = await handler(request);
+
+      if (ToolMessage.isInstance(result) && typeof result.content === 'string' && result.content.length > STRICT_CHAR_LIMIT) {
+        const toolCallId = request.toolCall?.id || result.tool_call_id;
+        const evictPath = `/large_tool_results/${sanitizeToolCallId(toolCallId)}`;
+
+        let contentToWrite = result.content;
+        try {
+          const parsed = JSON.parse(contentToWrite);
+          contentToWrite = JSON.stringify(parsed, null, 2);
+        } catch {}
+
+        const writeResult = await backend.write(evictPath, contentToWrite);
+        if (writeResult.error) return result;
+
+        const contentSample = createContentPreview(result.content);
+        return new ToolMessage({
+          content: TOO_LARGE_MSG
+            .replace('{tool_call_id}', result.tool_call_id)
+            .replace('{file_path}', evictPath)
+            .replace('{content_sample}', contentSample),
+          tool_call_id: result.tool_call_id,
+          name: result.name,
+          id: result.id,
+          artifact: (result as any).artifact,
+          status: result.status,
+          metadata: result.metadata,
+          additional_kwargs: result.additional_kwargs,
+          response_metadata: result.response_metadata,
+        });
+      }
+
+      return result;
+    },
+  });
+}
+
+export default async function createSimpleDeepAgent(
+  model: BaseLanguageModel,
+  conversationId: string,
+  sandboxManager: ConversationSandboxManager,
+): Promise<ReturnType<typeof createCustomDeepAgent>> {
+  const session = await sandboxManager.getConversationSandbox(conversationId);
+  const client = new MultiServerMCPClient({
+    grafana: {
+      transport: 'sse',
+      url: configSchema.GRAFANA_MCP_URL!,
+    },
+  });
+
+  // 过滤，只剩下
+  const FILTER_TOOLS = ['search_dashboards', 'list_datasources', 'get_dashboard_panel_queries', 'query_prometheus', 'list_prometheus_label_names', 'generate_deeplink', 'get_dashboard_by_uid'];
+  const allMcpTools = (await client.getTools()).filter(tool => FILTER_TOOLS.includes(tool.name)) as DynamicStructuredTool[]
+
+  const middleware = [
+    createToolErrorMiddleware(),
+    vfsRelativePathMiddleware,
+    createStrictToolEvictionMiddleware(session.backend),
+    contextOverflowBridgeMiddleware,
+  ]
+
+  return createCustomDeepAgent({
+    model: model,
+    tools: allMcpTools,
+    middleware,
+    extraSubagentMiddleware: [
+      contextOverflowBridgeMiddleware,
+    ],
+    backend: session.backend,
+    checkpointer: memory,
+    skills: [SANDBOX_SKILLS_ROOT]
+  });
+}

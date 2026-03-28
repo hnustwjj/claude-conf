@@ -1,0 +1,134 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Message, ChatEvent, TodoTreeItem } from '@/types';
+import { getChatHistory, getConversationStatus } from '@/lib/api';
+import { createMessageProcessor } from '@/lib/messageProcessor';
+import { parseTokenUsageFromAssistantEndData, type TokenUsageSnapshot } from '@/lib/tokenUsage';
+import { EVENT_ASSISTANT_END, ModelId } from '@/lib/const';
+
+interface UseChatHistoryOptions {
+  currentId: string | undefined;
+  skipNextHistoryLoadRef: React.MutableRefObject<boolean>;
+  selectedModelRef: React.MutableRefObject<ModelId>;
+  onScrollToBottom: (behavior?: ScrollBehavior) => void;
+  onSetSelectedModel: (model: ModelId) => void;
+  onError?: (error: Error) => void;
+}
+
+export function useChatHistory({
+  currentId,
+  skipNextHistoryLoadRef,
+  selectedModelRef,
+  onScrollToBottom,
+  onSetSelectedModel,
+  onError,
+}: UseChatHistoryOptions) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [todoTree, setTodoTree] = useState<TodoTreeItem[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [tokenUsage, setTokenUsage] = useState<TokenUsageSnapshot | undefined>(undefined);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  // Sync conversation status (model + tokenUsage) when switching conversations
+  useEffect(() => {
+    let cancelled = false;
+    if (!currentId) return () => { cancelled = true; };
+
+    void (async () => {
+      try {
+        const status = await getConversationStatus(currentId);
+        if (cancelled || !status) return;
+
+        const modelFromStatus = status.model as ModelId | undefined;
+        if (modelFromStatus && modelFromStatus !== selectedModelRef.current) {
+          onSetSelectedModel(modelFromStatus);
+        }
+
+        if (status.tokenUsage) {
+          setTokenUsage(status.tokenUsage);
+        }
+      } catch (error) {
+        console.error('Failed to load conversation status', error);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [currentId, onSetSelectedModel, selectedModelRef]);
+
+  // Load full history when currentId changes
+  useEffect(() => {
+    if (!currentId) {
+      if (!skipNextHistoryLoadRef.current) {
+        setMessages([]);
+        setTodoTree([]);
+      }
+      return;
+    }
+    if (skipNextHistoryLoadRef.current) {
+      skipNextHistoryLoadRef.current = false;
+      setIsLoading(false);
+      setIsHistoryLoading(false);
+      return;
+    }
+
+    const loadHistory = async () => {
+      setIsLoading(true);
+      setIsHistoryLoading(true);
+      try {
+        const processor = createMessageProcessor();
+        let latestTokenUsage: TokenUsageSnapshot | undefined;
+
+        await getChatHistory(currentId, (event: ChatEvent) => {
+          if (event.event === EVENT_ASSISTANT_END && (!event.source || event.source.kind === 'main') && !event.subagentNamespace) {
+            const usage = parseTokenUsageFromAssistantEndData(event.data);
+            if (usage) latestTokenUsage = usage;
+          }
+          processor.applyEvent(event);
+        });
+
+        const loaded = processor.getMessages();
+        const nextTodoTree = processor.getTodoTree();
+
+        setMessages(loaded.length === 0 ? [] : loaded);
+        setTodoTree(nextTodoTree);
+        setTokenUsage(prev => latestTokenUsage ?? prev);
+
+        if (loaded.length > 0) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          onScrollToBottom('auto');
+        }
+      } catch (error) {
+        console.error(error);
+        onErrorRef.current?.(error as Error);
+      } finally {
+        setIsLoading(false);
+        setIsHistoryLoading(false);
+      }
+    };
+
+    loadHistory();
+  }, [currentId, skipNextHistoryLoadRef, onScrollToBottom]);
+
+  // Called by useChat's setCurrentId to eagerly show skeleton before the effect fires
+  const prepareForSwitch = useCallback((id: string | undefined) => {
+    setMessages([]);
+    setTodoTree([]);
+    setIsHistoryLoading(!!id);
+    setIsLoading(!!id);
+    setTokenUsage(undefined);
+  }, []);
+
+  return {
+    messages,
+    setMessages,
+    todoTree,
+    setTodoTree,
+    isLoading,
+    setIsLoading,
+    isHistoryLoading,
+    tokenUsage,
+    setTokenUsage,
+    prepareForSwitch,
+  };
+}

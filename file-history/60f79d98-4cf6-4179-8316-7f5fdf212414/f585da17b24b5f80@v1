@@ -1,0 +1,331 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+This is a multi-agent AI system built with:
+- **Backend** (`multi-agent/`): NestJS + DeepAgents SDK + LangGraph.js for multi-agent orchestration
+- **Frontend** (`frontend/`): React + Vite + shadcn/ui for chat interface
+
+The system now uses a LangGraph supervisor as the top-level coordinator. The `deep-research` workflow remains a LangGraph sub-graph (Planner → Researcher → Writer) that handles multi-step research and document generation tasks.
+
+## Common Commands
+
+### Backend (multi-agent/)
+
+```bash
+# Development mode with hot reload (Windows)
+cd multi-agent && pnpm run dev
+
+# Build
+pnpm run build
+
+# Production
+pnpm run start:prod
+
+# Debug mode
+pnpm run start:debug
+```
+
+### Frontend (frontend/)
+
+```bash
+# Development
+cd frontend && pnpm run dev
+
+# Type check and build
+pnpm run build
+
+# Lint
+pnpm run lint
+
+# Preview build
+pnpm run preview
+```
+
+### Prerequisites
+
+Ensure these services are running before development:
+- Redis (localhost:6379)
+- MongoDB (localhost:27017)
+- Backend API (default port: 8888, configurable via PORT env var)
+
+## Architecture Overview
+
+### Multi-Agent Architecture (LangGraph Supervisor + Subgraph)
+
+```
+Top-level LangGraph Supervisor:
+  START → Coordinator
+            │
+            ├─ [simple query] → direct reply → END
+            ├─ [need more info] → Interaction → Coordinator/Planner
+            └─ [complex task] → deep-research subgraph
+                                 ↓
+deep-research subgraph:
+  LangGraph sub-graph:
+    START → Planner → [task planning]
+              ↓
+    ┌─────────┴─────────┐
+    ↓                   ↓
+    Researcher         Writer
+    ↓                   ↓
+    Planner            END
+    ↓
+    END
+```
+
+### Backend Structure (multi-agent/src/)
+
+```
+src/
+├── api/                     # API infrastructure layer
+│   ├── chat/                # SSE streaming chat endpoint
+│   ├── conversation/        # MongoDB-based conversation persistence
+│   ├── events/              # Redis event storage (linked list)
+│   └── attachment/          # File upload (local storage)
+├── agents/                  # Multi-agent system (core)
+│   ├── agents.service.ts    # Top-level supervisor assembly & event streaming
+│   ├── agents.module.ts     # Agents module definition
+│   ├── supervisor/          # Top-level supervisor graph
+│   └── deep-research/       # Deep research SubAgent
+│       ├── index.ts         # CompiledSubAgent factory + LangGraph sub-graph
+│       ├── state.ts         # LangGraph state annotation
+│       ├── node/            # Agent node implementations
+│       │   ├── planner.ts   # Task decomposition
+│       │   ├── researcher.ts # Information retrieval
+│       │   ├── writer.ts    # Markdown output
+│       │   └── utils.ts     # Node utility functions
+│       ├── tool/            # Tool definitions
+│       │   ├── internal.ts  # Internal tools (planning, next, deliver)
+│       │   ├── search.ts    # Tavily search
+│       │   └── amap.ts      # AMap (高德地图) tools
+│       └── prompt/          # Nunjucks templates for agent prompts
+│           ├── renderer.ts  # Template renderer
+│           ├── template/    # .md templates
+│           └── document/    # Reference docs (POI/region codes)
+├── config/                  # Configuration management
+│   ├── config.module.ts     # NestJS config module
+│   ├── config.schema.ts     # Config validation schema
+│   └── model.ts             # LLM instances + EModelName enum + models map
+├── logger/                  # Logging service
+│   └── index.ts             # Pino logger configuration
+├── common/                  # Shared utilities
+│   ├── constant.ts          # Global enums (ENodeName, EToolName, ETaskStatus) — EModelName moved to config/model.ts
+│   └── utils/               # Utility functions (formatDate, retry, ensureHttps)
+└── database/                # MongoDB/Redis connection modules
+```
+
+### Frontend Structure (frontend/src/)
+
+```
+src/
+├── pages/
+│   └── ChatPage.tsx         # Main chat page with Sidebar + ChatArea
+├── components/
+│   ├── chat/                # Chat-specific components
+│   │   ├── MessageList.tsx
+│   │   ├── MessageItem.tsx
+│   │   ├── ChatInput.tsx
+│   │   ├── ToolCallGroup.tsx
+│   │   └── RequirementCard.tsx
+│   ├── ui/                  # shadcn/ui base components
+│   ├── Sidebar.tsx
+│   └── MarkdownRenderer.tsx
+├── hooks/useChat.ts         # Chat state management (messages, send, etc.)
+├── lib/api.ts              # Axios API client with SSE parsing
+└── types/index.ts           # TypeScript types
+```
+
+## Key Code Patterns
+
+### Simple Deep Agent Pattern (Backend)
+
+```typescript
+// src/agents/agents.service.ts
+import { models, EModelName } from '../config/model';
+import createSimpleDeepAgent from './simple-deep-agent';
+
+// createGraph resolves the model instance and creates a simple deep agent
+private createGraph(model: EModelName, conversationId: string) {
+  const config = models[model];
+  return createSimpleDeepAgent(conversationId);
+}
+```
+
+### CompiledSubAgent Pattern (Backend)
+
+```typescript
+// src/agents/deep-research/index.ts
+import { CompiledSubAgent } from 'deepagents';
+
+export function createDeepResearchSubAgent(config): CompiledSubAgent {
+  return {
+    name: 'deep-research',
+    description: '擅长解决复杂问题...',
+    runnable: createDeepResearchGraph(config), // compiled LangGraph
+  };
+}
+```
+
+### Agent Node Pattern (deep-research sub-graph)
+
+```typescript
+// src/agents/deep-research/node/*.ts
+export const createXxxNode = (llm: LanguageModelLike) => {
+  const agent = createAgent({
+    model: llm,
+    tools: [...],
+    middleware: [
+      dynamicSystemPromptMiddleware(async () =>
+        render('agent-name.md', { context })
+      ),
+    ],
+  });
+
+  return async (state: State): Promise<Command> => {
+    const response = await agent.invoke(state);
+    return new Command({ goto: nextNode, update: {...} });
+  };
+};
+```
+
+### Tool Definition Pattern (Backend)
+
+```typescript
+// src/agents/deep-research/tool/*.ts
+export const xxxTool = tool({
+  name: 'tool-name',
+  description: '工具描述',
+  schema: z.object({
+    param: z.string().describe('参数描述'),
+  }),
+  func: async ({ param }) => {
+    return result;
+  },
+});
+```
+
+### Async Generator for Streaming (Backend)
+
+```typescript
+// AgentsService uses async generators for event streaming
+async *run(input: string, options: IGraphOptions): AsyncGenerator<IGraphEvent> {
+  const agent = this.createAgent(model);
+  const stream = agent.streamEvents(input, { version: 'v2', ... });
+  for await (const streamEvent of stream) {
+    yield { id, event, timestamp, node, data };
+  }
+}
+```
+
+### SSE Stream Parsing (Frontend)
+
+```typescript
+// lib/api.ts - handles SSE chunk parsing
+const parseStreamChunk = (buffer: string, onChunk: (event: ChatEvent) => void) => {
+  const lines = buffer.split('\n');
+  let remaining = lines.pop() || '';
+
+  for (const line of lines) {
+    if (line.trim()) {
+      const event = JSON.parse(line.trim());
+      onChunk(event);
+    }
+  }
+  return remaining; // Handle partial JSON
+};
+```
+
+## Code Conventions
+
+### Backend Naming
+- **Files**: kebab-case (`chat.service.ts`)
+- **Classes**: PascalCase (`ChatService`, `AgentsService`)
+- **Functions/Variables**: camelCase (`createAgent`, `sendMessage`)
+- **Constants/Enums**: UPPER_SNAKE_CASE or PascalCase (`ENodeName`, `SearchResultMaxLength`)
+- **Interfaces**: I prefix (`IGraphEvent`, `ITask`)
+- **Enums**: E prefix (`ENodeName`, `EModelName`, `EToolName`)
+
+### Frontend Naming
+- **Components**: PascalCase (`ChatPage`, `Sidebar`, `MessageList`)
+- **Props interfaces**: ComponentName + Props (`SidebarProps`)
+- **Types**: PascalCase (`Conversation`, `Message`, `ChatEvent`)
+- **Utilities**: camelCase (`cn`, `getConversations`)
+
+### Graph Events
+
+Backend emits these events via SSE:
+- `agent-start` / `agent-end`: Agent execution lifecycle
+- `assistant-start` / `assistant-end`: Chat model lifecycle
+- `assistant`: Streaming text content (with optional `thinking` field)
+- `tool-input`: Streaming tool call parameters
+- `tool-call`: Tool execution start
+- `tool-call-result`: Tool execution result
+- `conversation-create`: New conversation created
+
+### Model Configuration
+
+Models are defined in `src/config/model.ts` using `@langchain/deepseek`:
+- `DeepSeekChat`: `deepseek-chat` — general conversation tasks
+
+All models use `TEMPERATURE` from env. `EModelName` enum and `models` map are also exported from `model.ts`.
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /api/chat | Send message (SSE streaming) |
+| GET | /api/chat/events/:id | Get historical event stream |
+| GET | /api/conversations | List conversations |
+| GET | /api/conversation/:id | Get conversation status |
+| DELETE | /api/conversation/:id | Delete conversation |
+| POST | /api/conversation/:id/stop | Stop generation |
+| POST | /api/attachment | Upload file |
+
+## Environment Variables
+
+Backend `.env`:
+```env
+# LLM (DeepSeek via @langchain/deepseek)
+DEEPSEEK_API_KEY=xxx
+TEMPERATURE=0.5
+
+# LLM (OpenAI-compatible fallback, e.g. DeepSeek via OpenAI SDK)
+OPENAI_MODEL=deepseek-chat
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_API_KEY=xxx
+
+# Tools
+AMAP_API_KEY=xxx
+TAVILY_API_KEY=xxx
+GRAFANA_MCP_URL=xxx
+
+# Database
+MONGO_URL=mongodb://localhost:27017/multi_agent
+REDIS_URL=redis://localhost:6379
+
+# Server
+PORT=8888
+```
+
+Frontend connects to `http://localhost:8888/api` by default (configurable in `src/lib/api.ts`).
+
+## Important Implementation Notes
+
+1. **Supervisor + subgraph architecture**: The top-level orchestrator is a LangGraph supervisor that routes simple queries directly, uses `ask-user` interrupts for HITL, and delegates complex tasks to the `deep-research` subgraph.
+
+2. **Event node resolution**: Event streaming uses `resolveNode()` which checks both `checkpoint_ns` (for inner sub-graph node names) and `metadata.lc_agent_name` (for top-level agent identification).
+
+3. **AgentsService is DEFAULT scope**: The service is configured with DEFAULT scope; request metadata is passed through `IGraphOptions`.
+
+4. **Redis for events**: Events are stored as a Redis linked list (`RPUSH` for append, `LRANGE` for retrieval), allowing efficient historical event streaming.
+
+5. **MemorySaver for checkpointer**: Shared checkpointer enables conversation resumption via `thread_id` across the supervisor and `deep-research` subgraph during development.
+
+6. **Nunjucks for prompts**: Agent prompts are templates in `src/agents/deep-research/prompt/template/`, rendered at runtime with context variables.
+
+7. **SSE streaming**: Backend uses `PassThrough` stream from Node.js to pipe events to HTTP response; frontend parses via `axios` with `onDownloadProgress`.
+
+8. **Request encoding**: Backend uses `chcp 65001 >nul` in dev script for UTF-8 support on Windows.

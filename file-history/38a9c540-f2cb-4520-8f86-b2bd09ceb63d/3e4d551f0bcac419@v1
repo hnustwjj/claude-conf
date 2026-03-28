@@ -1,0 +1,89 @@
+import { describe, expect, it } from 'vitest';
+import type { Message } from '@/types';
+import { EVENT_ASSISTANT, EVENT_ASSISTANT_END } from '@/lib/const';
+import { buildSubagentDisplayState } from './subagentGroup';
+
+function createMessage(overrides: Partial<Message>): Message {
+  return {
+    id: overrides.id || crypto.randomUUID(),
+    role: 'assistant',
+    content: '',
+    timestamp: 1,
+    ...overrides,
+  };
+}
+
+describe('buildSubagentDisplayState', () => {
+  it('keeps task description for tooltip details and uses the latest assistant content as preview', () => {
+    const messages: Message[] = [
+      createMessage({
+        id: 'task',
+        event: 'tool-call',
+        toolName: 'task',
+        content: '{"subagent_type":"Researcher","description":"检索商品价格并汇总"}',
+      }),
+      createMessage({
+        id: 'assistant-1',
+        event: EVENT_ASSISTANT,
+        content: '已经找到 3 条候选结果',
+      }),
+      createMessage({
+        id: 'assistant-2',
+        event: EVENT_ASSISTANT,
+        content: '最终汇总已就绪',
+      }),
+    ];
+
+    const state = buildSubagentDisplayState({
+      key: 'tools:subagent-1',
+      label: 'Researcher',
+      messages,
+    });
+
+    expect(state.taskDescription).toBe('检索商品价格并汇总');
+    expect(state.latestAssistantContent).toBe('最终汇总已就绪');
+    expect(state.preview).toBe('最终汇总已就绪');
+    expect(state.completed).toBe(false);
+    expect(state.showTodoPanel).toBe(false);
+  });
+
+  it('marks a subagent as completed and hides todos after assistant-end', () => {
+    const messages: Message[] = [
+      createMessage({
+        id: 'task',
+        event: 'tool-call',
+        toolName: 'task',
+        content: '{"subagent_type":"Researcher","description":"检索商品价格并汇总"}',
+      }),
+      createMessage({
+        id: 'todos',
+        event: 'todo-update',
+        todos: [
+          { content: '搜索商品库', status: 'completed' },
+          { content: '汇总结果', status: 'completed' },
+        ],
+      }),
+      createMessage({
+        id: 'assistant',
+        event: EVENT_ASSISTANT,
+        content: '已经整理完成',
+      }),
+      createMessage({
+        id: 'assistant-end',
+        event: EVENT_ASSISTANT_END,
+        content: '',
+      }),
+    ];
+
+    const state = buildSubagentDisplayState({
+      key: 'tools:subagent-1',
+      label: 'Researcher',
+      messages,
+    });
+
+    expect(state.completed).toBe(true);
+    expect(state.preview).toBe('completed');
+    expect(state.showTodoPanel).toBe(false);
+    expect(state.latestAssistantContent).toBe('已经整理完成');
+  });
+});

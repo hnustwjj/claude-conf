@@ -1,0 +1,7 @@
+import { Module } from '@nestjs/common';
+import { GenerativeUIController } from './generative-ui.controller';
+
+@Module({
+  controllers: [GenerativeUIController],
+})
+export class GenerativeUIModule {}

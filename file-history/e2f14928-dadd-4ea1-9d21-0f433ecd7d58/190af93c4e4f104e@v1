@@ -1,0 +1,44 @@
+import { MemorySaver } from "@langchain/langgraph";
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { createDeepAgent } from "deepagents";
+import { createAgent, DynamicStructuredTool } from "langchain";
+import { createToolErrorMiddleware } from "../middleware/tool-error.middleware";
+import { ConversationSandboxManager } from '../sandbox/conversation-sandbox.manager';
+import { BaseLanguageModel } from "@langchain/core/language_models/base";
+import { SANDBOX_SKILLS_ROOT } from '../sandbox/sandbox-skills.config';
+import { configSchema } from "../../config/config.schema";
+
+const memory = new MemorySaver();
+
+
+
+export default async function createSimpleDeepAgent(
+  model: BaseLanguageModel,
+  conversationId: string,
+  sandboxManager: ConversationSandboxManager,
+): Promise<ReturnType<typeof createAgent>> {
+  const session = await sandboxManager.getConversationSandbox(conversationId);
+  const client = new MultiServerMCPClient({
+    grafana: {
+      transport: 'sse',
+      url: configSchema.GRAFANA_MCP_URL!,
+    },
+  });
+
+  // 过滤，只剩下
+  const FILTER_TOOLS = ['search_dashboards', 'list_datasources', 'get_dashboard_panel_queries', 'query_prometheus', 'list_prometheus_label_names', 'generate_deeplink', 'get_dashboard_by_uid'];
+  const allMcpTools = (await client.getTools()).filter(tool => FILTER_TOOLS.includes(tool.name)) as DynamicStructuredTool[]
+
+  const middleware = [
+    createToolErrorMiddleware(),
+  ]
+
+  return createDeepAgent({
+    model: model,
+    tools: allMcpTools,
+    middleware,
+    backend: session.backend,
+    checkpointer: memory,
+    skills: [SANDBOX_SKILLS_ROOT]
+  });
+}

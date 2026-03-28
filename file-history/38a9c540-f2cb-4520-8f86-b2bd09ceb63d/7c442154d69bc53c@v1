@@ -1,0 +1,704 @@
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Message, StreamSource, TodoItem } from '@/types';
+import {
+  EVENT_ASSISTANT,
+  EVENT_AGENT_END,
+  EVENT_ASSISTANT_END,
+  EVENT_TOOL_INPUT,
+  EVENT_TOOL_OUTPUT,
+  EVENT_TODO_UPDATE
+} from '@/lib/const';
+import { MessageItem } from './MessageItem';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Bot, Check, ChevronRight, Circle, Loader2, User } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  buildAssistantDisplayItems,
+  buildToolDisplayItems,
+  type AssistantDisplayItem,
+  type ToolDisplayItem,
+} from './messageDisplay';
+import { extractSingleLinePreview, isToolCallStep } from '@/lib/chatUtils';
+import { ThinkingText } from './ThinkingText';
+import { cn } from '@/lib/utils';
+import { buildSubagentDisplayState } from './subagentGroup';
+
+interface MessageListProps {
+  messages: Message[];
+  isLoading: boolean;
+  onAskUserSubmit: (interruptId: string | undefined, values: string | Record<string, unknown>) => Promise<void>;
+  scrollRef: React.RefObject<HTMLDivElement>;
+  selectedDetailMessageId?: string;
+  selectedSubagentKey?: string;
+  onSelectToolDetail?: (messageId: string) => void;
+  onSelectSubagent?: (subagentKey: string) => void;
+}
+
+function SubagentPreviewText({
+  text,
+  enableTooltip,
+  className,
+}: {
+  text: string;
+  enableTooltip: boolean;
+  className?: string;
+}) {
+  const textRef = useRef<HTMLDivElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  useEffect(() => {
+    if (!enableTooltip) {
+      setIsOverflowing(false);
+      return;
+    }
+
+    const element = textRef.current;
+    if (!element) {
+      return;
+    }
+
+    const checkOverflow = () => {
+      setIsOverflowing(element.scrollWidth > element.clientWidth);
+    };
+
+    checkOverflow();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(checkOverflow);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', checkOverflow);
+    return () => window.removeEventListener('resize', checkOverflow);
+  }, [enableTooltip, text]);
+
+  const content = (
+    <div ref={textRef} className={className}>
+      {text}
+    </div>
+  );
+
+  if (!enableTooltip || !isOverflowing) {
+    return content;
+  }
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>{content}</TooltipTrigger>
+        <TooltipContent side="top" align="start" className="max-w-sm p-3">
+          <div className="whitespace-pre-wrap break-words text-xs leading-5">{text}</div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+type MessageBlock =
+  | { type: 'user'; message: Message }
+  | { type: 'assistant'; messages: Message[] };
+
+type AssistantContentItem =
+  | { type: 'main'; key: string; messages: Message[] }
+  | { type: 'subagent'; key: string; source: StreamSource; messages: Message[] };
+
+type AssistantContentView =
+  | { type: 'main'; key: string; items: AssistantDisplayItem[] }
+  | {
+      type: 'subagent';
+      key: string;
+      label: string;
+      preview: string;
+      taskDescription?: string;
+      latestAssistantContent?: string;
+      completed: boolean;
+      error?: boolean;
+      isActive: boolean;
+      todos: TodoItem[];
+      showTodoPanel: boolean;
+      items: ToolDisplayItem[];
+      tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+    };
+
+const USER_AVATAR_CLASSNAME =
+  'absolute right-0 top-0 h-8 w-8 border bg-primary text-primary-foreground shadow-sm';
+
+const ASSISTANT_AVATAR_CLASSNAME =
+  'absolute left-0 top-0 h-8 w-8 border bg-muted shadow-sm';
+
+function getThinkingSummary(messages: Message[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message) continue;
+
+    if (typeof message.thinking === 'string') {
+      const thinkingPreview = extractSingleLinePreview(message.thinking, 36);
+      if (thinkingPreview) return thinkingPreview;
+    }
+
+    if (message.event === EVENT_ASSISTANT) {
+      const assistantPreview = extractSingleLinePreview(message.content, 36);
+      if (assistantPreview) return assistantPreview;
+    }
+
+    if (isToolCallStep(message.event)) {
+      return `调用工具: ${message.toolName || 'tool'}`;
+    }
+
+    if (message.event === EVENT_TOOL_OUTPUT) {
+      return `收到工具结果: ${message.toolName || 'tool'}`;
+    }
+  }
+
+  return '思考中...';
+}
+
+function getMessageSource(message: Message): StreamSource {
+  return message.source || { kind: 'main', key: 'main', label: message.node };
+}
+
+export function getAssistantContentRenderKey(contentViewKey: string, itemKey: string): string {
+  return `${contentViewKey}:${itemKey}`;
+}
+
+function isHiddenSubagentItem(item: ReturnType<typeof buildToolDisplayItems>[number]): boolean {
+  if (item.type === 'tool-pair') {
+    return (
+      item.primary.toolName === 'task' ||
+      item.secondary.toolName === 'task' ||
+      item.primary.event === EVENT_TODO_UPDATE ||
+      item.secondary.event === EVENT_TODO_UPDATE ||
+      item.primary.event === EVENT_AGENT_END ||
+      item.secondary.event === EVENT_AGENT_END ||
+      item.primary.event === EVENT_ASSISTANT_END ||
+      item.secondary.event === EVENT_ASSISTANT_END
+    );
+  }
+
+  return (
+    item.message.toolName === 'task' ||
+    item.message.event === EVENT_TODO_UPDATE ||
+    item.message.event === EVENT_AGENT_END ||
+    item.message.event === EVENT_ASSISTANT_END
+  );
+}
+
+function buildBlocks(messages: Message[]): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  let currentAssistantBlock: Message[] = [];
+
+  const flushAssistantBlock = () => {
+    if (currentAssistantBlock.length === 0) return;
+    blocks.push({ type: 'assistant', messages: currentAssistantBlock });
+    currentAssistantBlock = [];
+  };
+
+  for (const message of messages) {
+    if (message.role === 'user') {
+      flushAssistantBlock();
+      blocks.push({ type: 'user', message });
+      continue;
+    }
+    currentAssistantBlock.push(message);
+  }
+
+  flushAssistantBlock();
+  return blocks;
+}
+
+function buildAssistantContentItems(messages: Message[]): AssistantContentItem[] {
+  const items: AssistantContentItem[] = [];
+  let currentMainMessages: Message[] = [];
+  const subagentItemsByKey = new Map<string, AssistantContentItem>();
+
+  const flushMainMessages = () => {
+    if (currentMainMessages.length === 0) return;
+    items.push({
+      type: 'main',
+      key: `main-${items.length}`,
+      messages: currentMainMessages,
+    });
+    currentMainMessages = [];
+  };
+
+  for (const message of messages) {
+    const source = getMessageSource(message);
+    if (source.kind !== 'subagent') {
+      currentMainMessages.push(message);
+      continue;
+    }
+
+    flushMainMessages();
+    const existing = subagentItemsByKey.get(source.key);
+    if (existing && existing.type === 'subagent') {
+      existing.messages.push(message);
+      continue;
+    }
+
+    const item: AssistantContentItem = {
+      type: 'subagent',
+      key: source.key,
+      source,
+      messages: [message],
+    };
+    subagentItemsByKey.set(source.key, item);
+    items.push(item);
+  }
+
+  flushMainMessages();
+  return items;
+}
+
+// 先把原始消息整理成”主 assistant 内容 / subagent 卡片”两类视图模型，
+// 渲染层只消费这个中间结构，避免 JSX 里反复推导状态。
+function buildAssistantContentViews(
+  messages: Message[],
+  streamingMessageId?: string,
+  activeMessageId?: string,
+) {
+  const contentItems = buildAssistantContentItems(messages);
+  const contentViews = contentItems.map<AssistantContentView>(contentItem => {
+    if (contentItem.type === 'subagent') {
+      const displayState = buildSubagentDisplayState({
+        key: contentItem.key,
+        label: contentItem.source.label || 'Subagent',
+        messages: contentItem.messages,
+      });
+
+      // A subagent is active if the last overall assistant message belongs to it
+      const isActive = Boolean(
+        activeMessageId && contentItem.messages.some(message => message.id === activeMessageId),
+      );
+
+      // Extract the latest token usage from subagent assistant-end messages
+      let subagentTokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
+      for (let i = contentItem.messages.length - 1; i >= 0; i--) {
+        if (contentItem.messages[i].tokenUsage) {
+          subagentTokenUsage = contentItem.messages[i].tokenUsage;
+          break;
+        }
+      }
+
+      return {
+        type: 'subagent',
+        key: displayState.key,
+        label: displayState.label,
+        preview: displayState.preview,
+        taskDescription: displayState.taskDescription,
+        latestAssistantContent: displayState.latestAssistantContent,
+        completed: displayState.completed,
+        error: displayState.error,
+        isActive,
+        todos: displayState.todos,
+        showTodoPanel: displayState.showTodoPanel,
+        items: buildToolDisplayItems(contentItem.messages).filter(item => !isHiddenSubagentItem(item)),
+        tokenUsage: subagentTokenUsage,
+      };
+    }
+
+    return {
+      type: 'main',
+      key: contentItem.key,
+      items: buildAssistantDisplayItems(contentItem.messages, streamingMessageId),
+    };
+  });
+
+  return contentViews;
+}
+
+interface MessageRenderCallbacks {
+  isLoading: boolean;
+  selectedDetailMessageId?: string;
+  selectedSubagentKey?: string;
+  onAskUserSubmit: (interruptId: string | undefined, values: string | Record<string, unknown>) => Promise<void>;
+  onSelectToolDetail?: (messageId: string) => void;
+  onSelectSubagent?: (subagentKey: string) => void;
+}
+
+function renderToolDisplayItem(
+  item: ToolDisplayItem,
+  streamingMessageId: string | undefined,
+  callbacks: MessageRenderCallbacks,
+  options?: { displayVariant?: 'default' | 'thinking'; thinkingDisplayMode?: 'collapsible' | 'inline' },
+) {
+  if (item.type === 'tool-pair') {
+    return (
+      <MessageItem
+        key={item.key}
+        message={item.primary}
+        secondaryMessage={item.secondary}
+        isLoading={callbacks.isLoading}
+        isStreaming={item.primary.id === streamingMessageId || item.secondary.id === streamingMessageId}
+        displayVariant={options?.displayVariant}
+        thinkingDisplayMode={options?.thinkingDisplayMode}
+        isSelected={item.primary.id === callbacks.selectedDetailMessageId}
+        onAskUserSubmit={callbacks.onAskUserSubmit}
+        onSelectToolDetail={callbacks.onSelectToolDetail}
+      />
+    );
+  }
+
+  return (
+    <MessageItem
+      key={item.key}
+      message={item.message}
+      isLoading={callbacks.isLoading}
+      isStreaming={item.message.id === streamingMessageId}
+      displayVariant={options?.displayVariant}
+      thinkingDisplayMode={options?.thinkingDisplayMode}
+      isSelected={item.message.id === callbacks.selectedDetailMessageId}
+      onAskUserSubmit={callbacks.onAskUserSubmit}
+      onSelectToolDetail={callbacks.onSelectToolDetail}
+    />
+  );
+}
+
+function renderThinkingGroup(
+  item: Extract<AssistantDisplayItem, { type: 'thinking-group' }>,
+  callbacks: MessageRenderCallbacks,
+) {
+  const thinkingGroupStreamingId = item.streamingMessageId;
+  const summaryPreview = getThinkingSummary(item.messages);
+
+  return (
+    <details
+      key={item.key}
+      className="group min-w-0 overflow-hidden rounded-lg border border-border/70 bg-muted/30 px-3 py-2"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform duration-200 group-open:rotate-90" />
+        <span
+          className={cn(
+            'group-open:hidden truncate',
+            thinkingGroupStreamingId && 'animate-pulse',
+          )}
+        >
+          {summaryPreview}
+        </span>
+        <span className="hidden group-open:inline">思考过程</span>
+      </summary>
+      <div className="mt-2 min-w-0 space-y-2 overflow-hidden">
+        {buildToolDisplayItems(item.messages).map(thinkingItem => {
+          if (thinkingItem.type === 'tool-pair') {
+            return renderToolDisplayItem(thinkingItem, thinkingGroupStreamingId, callbacks, {
+              displayVariant: 'thinking',
+            });
+          }
+
+          const isSingleToolMessage =
+            isToolCallStep(thinkingItem.message.event) ||
+            thinkingItem.message.event === EVENT_TOOL_OUTPUT;
+
+          if (isSingleToolMessage) {
+            return renderToolDisplayItem(thinkingItem, thinkingGroupStreamingId, callbacks, {
+              displayVariant: 'thinking',
+            });
+          }
+
+          const thinkingText = thinkingItem.message.thinking || thinkingItem.message.content;
+          if (thinkingText) {
+            return (
+              <div
+                key={`thinking-${thinkingItem.key}`}
+                className="min-w-0 overflow-hidden text-muted-foreground/75"
+              >
+                <ThinkingText content={thinkingText} />
+              </div>
+            );
+          }
+
+          return renderToolDisplayItem(thinkingItem, thinkingGroupStreamingId, callbacks, {
+            displayVariant: 'thinking',
+          });
+        })}
+      </div>
+    </details>
+  );
+}
+
+function renderMainContentView(
+  contentView: Extract<AssistantContentView, { type: 'main' }>,
+  streamingMessageId: string | undefined,
+  callbacks: MessageRenderCallbacks,
+) {
+  return contentView.items.map(item => {
+    const renderKey = getAssistantContentRenderKey(contentView.key, item.key);
+
+    if (item.type === 'thinking-group') {
+      return (
+        <Fragment key={renderKey}>
+          {renderThinkingGroup(item, callbacks)}
+        </Fragment>
+      );
+    }
+
+    if (item.type === 'tool-pair') {
+      return (
+        <Fragment key={renderKey}>
+          <MessageItem
+            key={item.key}
+            message={item.primary}
+            secondaryMessage={item.secondary}
+            isLoading={callbacks.isLoading}
+            isStreaming={item.secondary.id === streamingMessageId}
+            isSelected={item.primary.id === callbacks.selectedDetailMessageId}
+            onAskUserSubmit={callbacks.onAskUserSubmit}
+            onSelectToolDetail={callbacks.onSelectToolDetail}
+          />
+        </Fragment>
+      );
+    }
+
+    return (
+      <Fragment key={renderKey}>
+        <MessageItem
+          key={item.key}
+          message={item.message}
+          isLoading={callbacks.isLoading}
+          isStreaming={item.message.id === streamingMessageId && item.message.event !== EVENT_TOOL_INPUT}
+          isSelected={item.message.id === callbacks.selectedDetailMessageId}
+          onAskUserSubmit={callbacks.onAskUserSubmit}
+          onSelectToolDetail={callbacks.onSelectToolDetail}
+        />
+      </Fragment>
+    );
+  });
+}
+
+function renderTodoStatusIcon(status: TodoItem['status']) {
+  if (status === 'completed') {
+    return (
+      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-background">
+        <Check className="h-2.5 w-2.5" strokeWidth={3} />
+      </span>
+    );
+  }
+
+  if (status === 'in_progress') {
+    return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
+  }
+
+  return <Circle className="h-4 w-4 text-muted-foreground" />;
+}
+
+function renderSubagentTodoList(
+  keyPrefix: string,
+  todos: TodoItem[],
+  contentClassName: string,
+) {
+  return (
+    <ol className="space-y-2">
+      {todos.map((todo, index) => (
+        <li key={`${keyPrefix}-${todo.content}-${index}`} className="flex items-start gap-2 text-xs">
+          <span className="mt-[2px] shrink-0">{renderTodoStatusIcon(todo.status)}</span>
+          <span className="text-muted-foreground tabular-nums">{index + 1}.</span>
+          <span
+            className={cn(
+              'min-w-0 flex-1 leading-5',
+              contentClassName,
+              todo.status === 'completed' && 'text-muted-foreground line-through',
+            )}
+          >
+            {todo.content}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function renderSubagentContentView(
+  contentView: Extract<AssistantContentView, { type: 'subagent' }>,
+  callbacks: MessageRenderCallbacks,
+) {
+  const isSelected = callbacks.selectedSubagentKey === contentView.key;
+  const labelContent = (
+    <div className="min-w-0 flex-1">
+      <div className="truncate text-sm font-semibold text-foreground">{contentView.label}</div>
+      <SubagentPreviewText
+        text={contentView.preview}
+        enableTooltip={Boolean(contentView.latestAssistantContent && !contentView.completed)}
+        className={cn(
+          'truncate text-xs',
+          contentView.error ? 'text-destructive' : 'text-muted-foreground',
+          callbacks.isLoading && contentView.isActive && !contentView.completed && !contentView.error && 'animate-pulse',
+        )}
+      />
+    </div>
+  );
+
+  return (
+    <button
+      type="button"
+      key={`subagent-${contentView.key}`}
+      data-subagent-card={contentView.key}
+      aria-pressed={isSelected}
+      onClick={() => callbacks.onSelectSubagent?.(contentView.key)}
+      className={cn(
+        'group/subagent relative flex w-full items-center gap-3 overflow-visible rounded-2xl border px-4 py-3 text-left shadow-sm transition-colors',
+        contentView.error
+          ? 'border-destructive/40 bg-destructive/5'
+          : isSelected
+            ? 'border-primary/40 bg-primary/5'
+            : 'border-border/60 bg-muted/20 hover:bg-muted/35',
+      )}
+    >
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-background text-foreground/80 shadow-sm">
+        <Bot className="h-4 w-4" />
+      </div>
+      {labelContent}
+      {contentView.tokenUsage && (
+        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+          {contentView.tokenUsage.totalTokens.toLocaleString('en-US')} tokens
+        </span>
+      )}
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+
+      {contentView.showTodoPanel && (
+        <div className="pointer-events-none absolute left-[calc(100%+0.75rem)] top-0 z-20 w-80 rounded-xl border border-border/70 bg-popover/95 p-3 opacity-0 shadow-xl transition-opacity duration-150 group-hover/subagent:opacity-100">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            {contentView.label} Todos
+          </div>
+          {renderSubagentTodoList(contentView.key, contentView.todos, 'text-popover-foreground')}
+        </div>
+      )}
+    </button>
+  );
+}
+
+function UserAvatar() {
+  return (
+    <Avatar
+      className={USER_AVATAR_CLASSNAME}
+      style={{ transform: 'translateX(calc(100% + 1rem))' }}
+    >
+      <AvatarFallback className="text-primary-foreground">
+        <User className="h-4 w-4" />
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+function AssistantAvatar({ isLoading = false, isActive = false }: { isLoading?: boolean; isActive?: boolean }) {
+  return (
+    <Avatar
+      className={cn(
+        ASSISTANT_AVATAR_CLASSNAME,
+        isActive && 'assistant-avatar--active border-primary/30 bg-primary/5 shadow-primary/20',
+      )}
+      style={{ transform: isLoading ? 'translateX(calc(-100% - 1rem))' : 'translateX(calc(-100% - 0.75rem))' }}
+    >
+      <AvatarFallback>
+        <div className={cn('relative', isActive && 'assistant-avatar--pirate-sway')}>
+          <Bot className={cn('h-4 w-4', isActive && 'text-primary/80')} />
+        </div>
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+export function MessageList({
+  messages,
+  isLoading,
+  onAskUserSubmit,
+  scrollRef,
+  selectedDetailMessageId,
+  selectedSubagentKey,
+  onSelectToolDetail,
+  onSelectSubagent,
+}: MessageListProps) {
+  const { blocks, lastVisibleMessage } = useMemo(() => {
+    const visibleMessages = messages.filter(message => {
+      if (message.event !== EVENT_TODO_UPDATE) {
+        return true;
+      }
+
+      return message.source?.kind === 'subagent';
+    });
+
+    return {
+      blocks: buildBlocks(visibleMessages),
+      lastVisibleMessage: visibleMessages.at(-1),
+    };
+  }, [messages]);
+
+  const isLoadingAfterUser = isLoading && lastVisibleMessage?.role === 'user';
+  const activeAssistantMessageId =
+    isLoading && lastVisibleMessage?.role === 'assistant' ? lastVisibleMessage.id : undefined;
+  // The last visible assistant message, used for subagent active detection
+  const lastAssistantMessageId = lastVisibleMessage?.role === 'assistant' ? lastVisibleMessage.id : undefined;
+  // streamingMessageId 必须指向最后一条正在接收内容的 assistant 消息，
+  // 而不是最后一条可见消息（后者可能是 subagent 推送的 agent-end 等空消息），
+  // 否则 markdown 渲染器会过早退出流式态，导致内容看起来被截断。
+  const streamingMessageId = useMemo(() => {
+    if (!isLoading) return undefined;
+    // 只有当最后一条可见消息本身就是 main source 的 assistant 事件时，才标记为流式中。
+    // 如果最新消息是 tool-call/agent-end 等，说明 assistant 文本块已经结束，
+    // 不应再给旧的 assistant 消息设置 isAnimating=true，否则 markdown 渲染器会
+    // 以不完整内容模式渲染，导致表格等 markdown 结构显示损坏。
+    const last = lastVisibleMessage;
+    if (last?.event === EVENT_ASSISTANT && (!last.source || last.source.kind === 'main')) {
+      return last.id;
+    }
+    return undefined;
+  }, [isLoading, lastVisibleMessage]);
+
+  return (
+    <div className="mx-auto min-h-full max-w-3xl space-y-2 pb-4">
+      {blocks.map((block, blockIndex) => {
+        if (block.type === 'user') {
+          return (
+            <div key={block.message.id} className="relative">
+              <UserAvatar />
+              <div className="flex justify-end">
+                <MessageItem
+                  message={block.message}
+                  isLoading={isLoading}
+                  isStreaming={block.message.id === streamingMessageId}
+                  onAskUserSubmit={onAskUserSubmit}
+                />
+              </div>
+            </div>
+          );
+        }
+
+        const contentViews = buildAssistantContentViews(block.messages, streamingMessageId, activeAssistantMessageId);
+        // Active if this block contains the last visible assistant message and we're still loading
+        const isActiveAssistantBlock = Boolean(
+          isLoading && lastAssistantMessageId && block.messages.some(message => message.id === lastAssistantMessageId),
+        );
+        const callbacks: MessageRenderCallbacks = {
+          isLoading,
+          selectedDetailMessageId,
+          selectedSubagentKey,
+          onAskUserSubmit,
+          onSelectToolDetail,
+          onSelectSubagent,
+        };
+
+        return (
+          <div key={`assistant-${blockIndex}`} className="relative">
+            <AssistantAvatar isActive={isActiveAssistantBlock} />
+            <div className="min-h-8 space-y-1">
+              {contentViews.map(contentView =>
+                contentView.type === 'subagent'
+                  ? renderSubagentContentView(contentView, callbacks)
+                  : renderMainContentView(contentView, streamingMessageId, callbacks),
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {isLoadingAfterUser && (
+        <div className="relative">
+          <AssistantAvatar isLoading isActive />
+          <div className="min-h-8" />
+        </div>
+      )}
+
+      <div ref={scrollRef} />
+    </div>
+  );
+}

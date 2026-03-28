@@ -1,0 +1,103 @@
+import type { Message, TodoItem } from '@/types';
+import { EVENT_ASSISTANT, EVENT_TOOL_CALL_RESULT } from '@/lib/const';
+import { extractSingleLinePreview, extractTaskDescription } from '@/lib/chatUtils';
+
+interface BuildSubagentDisplayStateOptions {
+  key: string;
+  label: string;
+  messages: Message[];
+}
+
+export interface SubagentDisplayState {
+  key: string;
+  label: string;
+  taskDescription?: string;
+  latestAssistantContent?: string;
+  preview: string;
+  completed: boolean;
+  error?: boolean;
+  todos: TodoItem[];
+  showTodoPanel: boolean;
+}
+
+function getTaskDescription(messages: Message[]): string | undefined {
+  for (const message of messages) {
+    if (message.toolName !== 'task') {
+      continue;
+    }
+
+    const description = extractTaskDescription(message.content);
+    if (description) {
+      return description;
+    }
+  }
+
+  return undefined;
+}
+
+function getLatestAssistantContent(messages: Message[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.event !== EVENT_ASSISTANT || !message.content.trim()) {
+      continue;
+    }
+
+    return extractSingleLinePreview(message.content, 64);
+  }
+
+  return undefined;
+}
+
+function getLatestSubagentTodos(messages: Message[]): TodoItem[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (Array.isArray(message?.todos)) {
+      return message.todos;
+    }
+  }
+
+  return [];
+}
+
+function isSubagentCompleted(messages: Message[]): boolean {
+  const lastMessage = messages.at(-1);
+  if (lastMessage?.event === EVENT_TOOL_CALL_RESULT && lastMessage?.toolName === 'task') {
+    return true;
+  }
+  return false;
+}
+
+function hasSubagentError(messages: Message[]): boolean {
+  return messages.some(
+    message => message.event === EVENT_TOOL_CALL_RESULT && message.toolName === 'task' && !!message.isError,
+  );
+}
+
+export function buildSubagentDisplayState({
+  key,
+  label,
+  messages,
+}: BuildSubagentDisplayStateOptions): SubagentDisplayState {
+  const taskDescription = getTaskDescription(messages);
+  const latestAssistantContent = getLatestAssistantContent(messages);
+  const todos = getLatestSubagentTodos(messages);
+  const completed = isSubagentCompleted(messages);
+  const error = hasSubagentError(messages);
+  const preview = error
+    ? '执行失败'
+    : completed
+      ? 'completed'
+      : latestAssistantContent || taskDescription || '处理中...';
+
+  return {
+    key,
+    label,
+    taskDescription,
+    latestAssistantContent,
+    preview,
+    completed,
+    error,
+    todos,
+    showTodoPanel: !completed && todos.length > 0,
+  };
+}

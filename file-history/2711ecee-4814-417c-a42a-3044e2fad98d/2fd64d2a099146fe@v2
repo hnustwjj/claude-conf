@@ -1,0 +1,53 @@
+// WPS ET (Excel) 宏脚本 - 导出所有工作表中的图片
+// 使用方法：在 WPS 中打开文件后，进入"工具 > 宏 > JS宏"，新建宏并粘贴此代码运行
+
+function ExportAllImages() {
+    var outputDir = "/Users/bytedance/Downloads/topman至尊版7/extracted_images/";
+
+    // 确保输出目录存在
+    var fs = new ActiveXObject("Scripting.FileSystemObject");
+    if (!fs.FolderExists(outputDir)) {
+        fs.CreateFolder(outputDir);
+    }
+
+    var wb = Application.ActiveWorkbook;
+    var totalExported = 0;
+
+    for (var i = 1; i <= wb.Sheets.Count; i++) {
+        var ws = wb.Sheets(i);
+        var sheetName = ws.Name;
+        // 替换非法文件名字符
+        var safeName = sheetName.replace(/[\\\/\:\*\?\"\<\>\|]/g, "_");
+
+        var shapeCount = ws.Shapes.Count;
+
+        for (var j = 1; j <= shapeCount; j++) {
+            var shape = ws.Shapes(j);
+            var shapeName = shape.Name.replace(/[\\\/\:\*\?\"\<\>\|]/g, "_");
+            var fileName = outputDir + safeName + "_" + shapeName + ".png";
+
+            try {
+                // 方法1: 直接导出
+                shape.Export(fileName, "PNG");
+                totalExported++;
+            } catch(e1) {
+                try {
+                    // 方法2: 通过复制到剪贴板
+                    shape.CopyPicture(1, 2);
+                    // 创建临时图表并导出
+                    var tempChart = ws.ChartObjects.Add(0, 0, shape.Width, shape.Height);
+                    tempChart.Chart.Paste();
+                    tempChart.Chart.Export(fileName, "PNG");
+                    tempChart.Delete();
+                    totalExported++;
+                } catch(e2) {
+                    // 记录失败
+                }
+            }
+        }
+    }
+
+    MsgBox("导出完成！共导出 " + totalExported + " 张图片到:\n" + outputDir);
+}
+
+ExportAllImages();

@@ -1,0 +1,25 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule } from './config/config.module';
+import { MongoModule } from './database/mongo/mongo.module';
+import { RedisModule } from './database/redis/redis.module';
+import { ChatModule } from './api/chat/chat.module';
+import { ConversationModule } from './api/conversation/conversation.module';
+import { AttachmentModule } from './api/attachment/attachment.module';
+import { AgentsModule } from './agents/agents.module';
+import { EventsModule } from './api/events/events.module';
+import { GenerativeUIModule } from './api/generative-ui/generative-ui.module';
+
+@Module({
+  imports: [
+    ConfigModule,
+    MongoModule,
+    RedisModule,
+    ChatModule,
+    ConversationModule,
+    AttachmentModule,
+    AgentsModule,
+    EventsModule,
+    GenerativeUIModule,
+  ],
+})
+export class AppModule {}

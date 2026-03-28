@@ -1,0 +1,892 @@
+import { GenerativeUIMessage, GenerativeUIPayload, ChatEvent, Message, StreamSource, TodoItem, TodoTreeItem, ToolDetail } from '@/types';
+import { parse as parsePartialJson } from 'partial-json';
+import {
+  buildToolDetailFromArgs,
+  formatEventContent,
+  generateId,
+  getEventContent,
+  getToolInputData,
+  isDetailToolName,
+} from './chatUtils';
+import { parseTokenUsageFromAssistantEndData } from './tokenUsage';
+import {
+  EVENT_USER,
+  EVENT_ASSISTANT,
+  EVENT_THINKING,
+  EVENT_TOOL_INPUT,
+  EVENT_TOOL_CALL,
+  EVENT_TOOL_CALL_RESULT,
+  EVENT_DELIVER,
+  EVENT_ERROR,
+  EVENT_TOOL_OUTPUT,
+  EVENT_GENERATIVE_UI,
+  EVENT_SET_GENERATIVE_UI_ANSWER,
+  EVENT_CONTEXT_SUMMARIZED,
+  EVENT_TODO_UPDATE,
+  EVENT_AGENT_END,
+  EVENT_ASSISTANT_END,
+  FILTERED_MESSAGE_EVENTS,
+  TOOL_WRITE_TODOS,
+  TOOL_RENDER_UI,
+  TOOL_WRITE_FILE,
+  TOOL_EXECUTE,
+} from './const';
+
+// ─── write_todos JSON extraction ─────────────────────────────────────────────
+
+const VALID_TODO_STATUSES = new Set(['pending', 'in_progress', 'completed']);
+
+function parseTodoItems(accumulated: string): TodoItem[] {
+  try {
+    const parsed = parsePartialJson(accumulated);
+    return sanitizeTodoItems(parsed?.todos);
+  } catch {
+    return [];
+  }
+}
+
+function sanitizeTodoItems(todos: unknown): TodoItem[] {
+  if (!Array.isArray(todos)) {
+    return [];
+  }
+
+  return todos.filter(
+    (item): item is TodoItem =>
+      typeof item?.content === 'string' && VALID_TODO_STATUSES.has(item.status),
+  );
+}
+
+function toTodoTree(todos: TodoItem[]): TodoTreeItem[] {
+  return todos.map(todo => ({
+    ...todo,
+    children: [],
+  }));
+}
+
+const FILTERED_MESSAGE_EVENT_SET = new Set<string>(FILTERED_MESSAGE_EVENTS);
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function parseGenerativeUIPreview(accumulated: string): GenerativeUIMessage | undefined {
+  try {
+    const parsed = parsePartialJson(accumulated);
+    if (!parsed || typeof parsed !== 'object') return undefined;
+
+    const data = parsed as Record<string, unknown>;
+    const title = asString(data.title) || '';
+    const rawSpec = data.spec as Record<string, unknown> | undefined;
+    if (!title && !rawSpec) return undefined;
+
+    // Filter to only include elements with valid type/props for progressive rendering
+    const spec = rawSpec ? buildSafeSpecRaw(rawSpec) : {};
+
+    return {
+      title: title || 'UI',
+      spec,
+      interactive: data.interactive === true,
+      isPreview: true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Inline safe-spec filter for messageProcessor (avoids importing from @json-render/core).
+ * Only keeps elements with valid type + props so partial streaming doesn't break the renderer.
+ */
+function buildSafeSpecRaw(rawSpec: Record<string, unknown>): Record<string, unknown> {
+  if (!rawSpec?.root || !rawSpec?.elements) return rawSpec;
+  const elements = rawSpec.elements as Record<string, Record<string, unknown>>;
+  const rootEl = elements[rawSpec.root as string];
+  if (!rootEl?.type || rootEl?.props == null) return rawSpec;
+
+  const safeElements: Record<string, unknown> = {};
+  for (const [key, el] of Object.entries(elements)) {
+    if (el?.type && el?.props != null) {
+      safeElements[key] = el;
+    }
+  }
+  return {
+    root: rawSpec.root,
+    elements: safeElements,
+    ...(rawSpec.state ? { state: rawSpec.state } : {}),
+  };
+}
+
+// ─── Processor ────────────────────────────────────────────────────────────────
+
+interface ProcessorState {
+  messages: Message[];
+  todoTree: TodoTreeItem[];
+  sourceStates: Record<string, SourceScopedState>;
+}
+
+interface SourceScopedState {
+  currentAssistantId: string | undefined;
+  todoMessageId: string | undefined;
+  todoBuffer: string;
+  generativeUIPreviewMessageId: string | undefined;
+  generativeUIPreviewBuffer: string;
+  detailMessageIds: Partial<Record<typeof TOOL_WRITE_FILE | typeof TOOL_EXECUTE, string>>;
+  detailBuffers: Partial<Record<typeof TOOL_WRITE_FILE | typeof TOOL_EXECUTE, string>>;
+}
+
+/**
+ * 创建一个有状态的消息处理器。
+ * 同一套 applyEvent 逻辑被流式处理和历史加载共享，确保两路径产出完全一致的 Message[]。
+ *
+ * - 流式：每次 applyEvent 后调用 setMessages([...processor.getMessages()])
+ * - 历史：批量 applyEvent，最后调用 setMessages(processor.getMessages())
+ */
+export function createMessageProcessor(initialMessages: Message[] = []) {
+  const state: ProcessorState = {
+    messages: [...initialMessages],
+    todoTree: [],
+    sourceStates: {},
+  };
+
+  // ── helpers ──────────────────────────────────────────────────────────────────
+
+  function getSourceKey(source?: StreamSource): string {
+    return source?.key || 'main';
+  }
+
+  function isSameSource(left?: StreamSource, right?: StreamSource): boolean {
+    return (left?.kind || 'main') === (right?.kind || 'main') && getSourceKey(left) === getSourceKey(right);
+  }
+
+  function resolveEventSource(event: ChatEvent): StreamSource {
+    if (event.subagentNamespace) {
+      return {
+        kind: 'subagent',
+        key: event.subagentNamespace,
+        label: event.subagentType,
+      };
+    }
+    return event.source || { kind: 'main', key: 'main', label: event.node };
+  }
+
+  function getSubagentFields(source: StreamSource): Pick<Message, 'subagentType' | 'subagentNamespace'> {
+    return source.kind === 'subagent'
+      ? {
+          subagentType: source.label,
+          subagentNamespace: source.key,
+        }
+      : {
+          subagentType: undefined,
+          subagentNamespace: undefined,
+        };
+  }
+
+  function getSourceState(source: StreamSource): SourceScopedState {
+    const key = getSourceKey(source);
+    if (!state.sourceStates[key]) {
+      state.sourceStates[key] = {
+        currentAssistantId: undefined,
+        todoMessageId: undefined,
+        todoBuffer: '',
+        generativeUIPreviewMessageId: undefined,
+        generativeUIPreviewBuffer: '',
+        detailMessageIds: {},
+        detailBuffers: {},
+      };
+    }
+    return state.sourceStates[key];
+  }
+
+  for (const message of initialMessages) {
+    const source = message.source || { kind: 'main', key: 'main', label: message.node };
+    const sourceState = getSourceState(source);
+    if (message.event === EVENT_TODO_UPDATE) {
+      sourceState.todoMessageId = message.id;
+      syncMainTodoTree(source, sanitizeTodoItems(message.todos));
+    }
+  }
+
+  function push(msg: Omit<Message, 'id'> & { id?: string }): Message {
+    const m = { ...msg, id: msg.id || generateId() } as Message;
+    state.messages.push(m);
+    return m;
+  }
+
+  function updateById(id: string, updater: (msg: Message) => Message): void {
+    const idx = state.messages.findIndex(m => m.id === id);
+    if (idx !== -1) state.messages[idx] = updater(state.messages[idx]);
+  }
+
+  function resolveEventId(event: ChatEvent): string {
+    return event.id || generateId();
+  }
+
+  function resolveEventTimestamp(event: ChatEvent): number {
+    return typeof event.timestamp === 'number' ? event.timestamp : Date.now();
+  }
+
+  function getToolCallId(data: Record<string, unknown> | undefined): string | undefined {
+    return typeof data?.id === 'string' ? data.id : undefined;
+  }
+
+  function parseStructuredInput(accumulated: string): Record<string, unknown> | undefined {
+    if (!accumulated) return undefined;
+    try {
+      const parsed = parsePartialJson(accumulated);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function getMessageById(id: string | undefined): Message | undefined {
+    if (!id) return undefined;
+    return state.messages.find(message => message.id === id);
+  }
+
+  // ── generative-ui helpers ────────────────────────────────────────────────────
+
+  function finalizeGenerativeUI(payload: GenerativeUIPayload, event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const timestamp = resolveEventTimestamp(event);
+    const content = payload.title || 'UI';
+
+    const finalizedPayload: GenerativeUIMessage = {
+      ...payload,
+      isPreview: false,
+    };
+
+    if (sourceState.generativeUIPreviewMessageId) {
+      updateById(sourceState.generativeUIPreviewMessageId, msg => ({
+        ...msg,
+        role: 'assistant',
+        content,
+        timestamp,
+        event: EVENT_GENERATIVE_UI,
+        node: event.node,
+        generativeUI: finalizedPayload,
+        ...getSubagentFields(source),
+        source,
+      }));
+      sourceState.generativeUIPreviewMessageId = undefined;
+      sourceState.generativeUIPreviewBuffer = '';
+      return;
+    }
+
+    push({
+      role: 'assistant',
+      content,
+      timestamp,
+      event: EVENT_GENERATIVE_UI,
+      node: event.node,
+      generativeUI: finalizedPayload,
+      ...getSubagentFields(source),
+      source,
+    });
+    sourceState.generativeUIPreviewMessageId = undefined;
+    sourceState.generativeUIPreviewBuffer = '';
+  }
+
+  function upsertGenerativeUIPreview(payload: GenerativeUIMessage, event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const timestamp = resolveEventTimestamp(event);
+    const content = payload.title || 'UI';
+    if (!content && !payload.spec) return;
+
+    if (sourceState.generativeUIPreviewMessageId) {
+      updateById(sourceState.generativeUIPreviewMessageId, msg => ({
+        ...msg,
+        role: 'assistant',
+        content: content || msg.content,
+        timestamp,
+        event: EVENT_GENERATIVE_UI,
+        node: event.node,
+        generativeUI: payload,
+        ...getSubagentFields(source),
+        source,
+      }));
+      return;
+    }
+
+    sourceState.generativeUIPreviewMessageId = generateId();
+    push({
+      id: sourceState.generativeUIPreviewMessageId,
+      role: 'assistant',
+      content: content || 'UI',
+      timestamp,
+      event: EVENT_GENERATIVE_UI,
+      node: event.node,
+      generativeUI: payload,
+      ...getSubagentFields(source),
+      source,
+    });
+  }
+
+  // ── todo helpers ─────────────────────────────────────────────────────────────
+
+  function syncMainTodoTree(source: StreamSource, todos: TodoItem[]): void {
+    if (source.kind === 'main') {
+      state.todoTree = toTodoTree(todos);
+    }
+  }
+
+  function createTodoUpdateMessage(
+    todos: TodoItem[],
+    event: ChatEvent,
+    sourceState: SourceScopedState,
+    source: StreamSource,
+    timestamp: number,
+  ): void {
+    sourceState.todoMessageId = generateId();
+    syncMainTodoTree(source, todos);
+    push({
+      id: sourceState.todoMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp,
+      event: EVENT_TODO_UPDATE,
+      node: event.node,
+      todos,
+      ...getSubagentFields(source),
+      source,
+    });
+  }
+
+  function upsertTodo(todos: TodoItem[], event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const timestamp = resolveEventTimestamp(event);
+    if (sourceState.todoMessageId) {
+      updateById(sourceState.todoMessageId, msg => {
+        const oldTodos = msg.todos || [];
+        // 流式解析时 partial-json 可能产出 content 为空字符串的不完整条目，
+        // 只有新条目的 content 非空时才覆盖旧数据，避免已有内容被清空。
+        const mergedTodos = oldTodos.map((todo, index) => {
+          const newTodo = todos[index];
+          return (newTodo?.content) ? newTodo : todo;
+        });
+        if (todos.length > oldTodos.length) {
+          mergedTodos.push(...todos.slice(oldTodos.length).filter(t => t.content));
+        }
+        syncMainTodoTree(source, mergedTodos);
+        return { ...msg, timestamp, todos: mergedTodos };
+      });
+    } else {
+      createTodoUpdateMessage(todos, event, sourceState, source, timestamp);
+    }
+  }
+
+  function finalizeTodo(todos: TodoItem[], event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const timestamp = resolveEventTimestamp(event);
+    if (sourceState.todoMessageId) {
+      if (todos.length > 0) {
+        syncMainTodoTree(source, todos);
+        updateById(sourceState.todoMessageId, msg => ({
+          ...msg,
+          timestamp,
+          todos,
+          ...getSubagentFields(source),
+          source,
+        }));
+      }
+      sourceState.todoBuffer = '';
+    } else if (todos.length > 0) {
+      createTodoUpdateMessage(todos, event, sourceState, source, timestamp);
+    }
+  }
+
+  function upsertToolDetailPreview(
+    toolName: typeof TOOL_WRITE_FILE | typeof TOOL_EXECUTE,
+    inputText: string,
+    event: ChatEvent,
+    sourceState: SourceScopedState,
+    source: StreamSource,
+  ): void {
+    sourceState.currentAssistantId = undefined;
+    sourceState.detailBuffers[toolName] = (sourceState.detailBuffers[toolName] || '') + (inputText || '');
+    const parsed = parseStructuredInput(sourceState.detailBuffers[toolName] || '');
+    if (!parsed) return;
+
+    const detail = buildToolDetailFromArgs(toolName, parsed, 'streaming');
+    if (!detail) return;
+
+    const existingId = sourceState.detailMessageIds[toolName];
+    const timestamp = resolveEventTimestamp(event);
+    if (existingId) {
+      updateById(existingId, msg => ({
+        ...msg,
+        event: EVENT_TOOL_INPUT,
+        content: detail.summary,
+        timestamp,
+        toolName,
+        node: event.node,
+        toolDetail: detail,
+        ...getSubagentFields(source),
+        source,
+      }));
+      return;
+    }
+
+    const messageId = generateId();
+    sourceState.detailMessageIds[toolName] = messageId;
+    push({
+      id: messageId,
+      role: 'assistant',
+      content: detail.summary,
+      timestamp,
+      event: EVENT_TOOL_INPUT,
+      toolName,
+      node: event.node,
+      toolDetail: detail,
+      ...getSubagentFields(source),
+      source,
+    });
+  }
+
+  function upsertToolDetailCall(
+    toolName: typeof TOOL_WRITE_FILE | typeof TOOL_EXECUTE,
+    data: Record<string, unknown>,
+    event: ChatEvent,
+    sourceState: SourceScopedState,
+    source: StreamSource,
+  ): void {
+    const rawInput = typeof data.input === 'string' ? data.input : JSON.stringify(data.input ?? {});
+    const parsed = parseStructuredInput(rawInput) || parseStructuredInput(sourceState.detailBuffers[toolName] || '');
+    const previousDetail = getMessageById(sourceState.detailMessageIds[toolName])?.toolDetail;
+    const detail = parsed
+      ? buildToolDetailFromArgs(toolName, parsed, 'running')
+      : previousDetail
+        ? { ...previousDetail, status: 'running' as const, summary: previousDetail.summary }
+        : undefined;
+    if (!detail) return;
+
+    const timestamp = resolveEventTimestamp(event);
+    const toolCallId = getToolCallId(data);
+    const messageId = sourceState.detailMessageIds[toolName] || generateId();
+    sourceState.detailMessageIds[toolName] = messageId;
+    sourceState.detailBuffers[toolName] = '';
+
+    const nextDetail: ToolDetail = {
+      ...detail,
+      status: 'running',
+      summary: detail.summary.replace(/ · .+$/, ' · 执行中'),
+    };
+
+    if (getMessageById(messageId)) {
+      updateById(messageId, msg => ({
+        ...msg,
+        event: EVENT_TOOL_CALL,
+        content: nextDetail.summary,
+        timestamp,
+        toolName,
+        toolCallId,
+        node: event.node,
+        toolDetail: nextDetail,
+        ...getSubagentFields(source),
+        source,
+      }));
+      return;
+    }
+
+    push({
+      id: messageId,
+      role: 'assistant',
+      content: nextDetail.summary,
+      timestamp,
+      event: EVENT_TOOL_CALL,
+      toolName,
+      toolCallId,
+      node: event.node,
+      toolDetail: nextDetail,
+      ...getSubagentFields(source),
+      source,
+    });
+  }
+
+  function finalizeToolDetailResult(
+    toolName: typeof TOOL_WRITE_FILE | typeof TOOL_EXECUTE,
+    data: Record<string, unknown>,
+    event: ChatEvent,
+    sourceState: SourceScopedState,
+    source: StreamSource,
+  ): void {
+    const messageId = sourceState.detailMessageIds[toolName];
+    if (!messageId) return;
+    const existing = getMessageById(messageId);
+    if (!existing?.toolDetail) return;
+
+    const isError = !!data.error;
+    const output = toolName === TOOL_EXECUTE ? formatEventContent(event) : existing.toolDetail.output;
+    const nextDetail: ToolDetail = {
+      ...existing.toolDetail,
+      status: isError ? 'error' : 'completed',
+      output,
+      summary: `${existing.toolDetail.title} · ${isError ? '失败' : '已完成'}`,
+    };
+
+    updateById(messageId, msg => ({
+      ...msg,
+      event: EVENT_TOOL_CALL_RESULT,
+      content: nextDetail.summary,
+      timestamp: resolveEventTimestamp(event),
+      toolName,
+      toolCallId: getToolCallId(data) || msg.toolCallId,
+      node: event.node,
+      outputLength: typeof data.outputLength === 'number' ? data.outputLength as number : msg.outputLength,
+      isError,
+      toolDetail: nextDetail,
+      ...getSubagentFields(source),
+      source,
+    }));
+
+    sourceState.detailMessageIds[toolName] = undefined;
+    sourceState.detailBuffers[toolName] = '';
+  }
+
+  function pushAssistantMessage(
+    event: ChatEvent,
+    source: StreamSource,
+    content: string,
+    overrides?: Partial<Message>,
+  ): void {
+    push({
+      id: resolveEventId(event),
+      role: 'assistant',
+      content,
+      timestamp: resolveEventTimestamp(event),
+      node: event.node,
+      ...overrides,
+      ...getSubagentFields(source),
+      source,
+    });
+  }
+
+  function handleUserEvent(event: ChatEvent): void {
+    push({
+      id: resolveEventId(event),
+      role: 'user',
+      content: getEventContent(event),
+      timestamp: resolveEventTimestamp(event),
+      event: EVENT_USER,
+      node: event.node,
+    });
+  }
+
+  function handleTodoUpdateEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const todos = sanitizeTodoItems((event.data as Record<string, unknown>)?.todos);
+    finalizeTodo(todos, event, sourceState, source);
+  }
+
+  function handleGenerativeUIEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const payload = event.data as GenerativeUIPayload | undefined;
+    if (payload?.spec) {
+      finalizeGenerativeUI(payload, event, sourceState, source);
+    }
+  }
+
+  function handleSetGenerativeUIAnswer(event: ChatEvent): void {
+    const data = event.data as Record<string, unknown> | undefined;
+    const interruptId = typeof data?.interruptId === 'string' ? data.interruptId : undefined;
+    const answer = data?.answer as string | Record<string, unknown> | undefined;
+    if (!interruptId) return;
+
+    for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+      const msg = state.messages[i];
+      if (msg.generativeUI?.interruptId === interruptId) {
+        state.messages[i] = {
+          ...msg,
+          generativeUI: {
+            ...msg.generativeUI,
+            answer,
+          } as GenerativeUIMessage,
+        };
+        break;
+      }
+    }
+  }
+
+  function appendAssistantChunk(
+    event: ChatEvent,
+    sourceState: SourceScopedState,
+    source: StreamSource,
+    next: { content?: string; thinking?: string },
+  ): void {
+    const content = next.content || '';
+    const thinking = next.thinking || '';
+
+    if (sourceState.currentAssistantId) {
+      updateById(sourceState.currentAssistantId, msg => ({
+        ...msg,
+        content: msg.content + content,
+        thinking: thinking ? (msg.thinking || '') + thinking : msg.thinking,
+        ...getSubagentFields(source),
+        source,
+      }));
+      return;
+    }
+
+    if (!content && !thinking) {
+      return;
+    }
+
+    const id = resolveEventId(event);
+    sourceState.currentAssistantId = id;
+    push({
+      id,
+      role: 'assistant',
+      content,
+      thinking: thinking || undefined,
+      timestamp: resolveEventTimestamp(event),
+      event: EVENT_ASSISTANT,
+      node: event.node,
+      ...getSubagentFields(source),
+      source,
+    });
+  }
+
+  function handleAssistantEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const content = getEventContent(event);
+    const thinking = ((event.data as Record<string, unknown>)?.thinking as string) || '';
+    appendAssistantChunk(event, sourceState, source, { content, thinking });
+  }
+
+  function handleThinkingEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const data = event.data as Record<string, unknown>;
+    const thinkingText = ((data?.thinking as string) || '') + ((data?.content as string) || '');
+    appendAssistantChunk(event, sourceState, source, { thinking: thinkingText });
+  }
+
+  function handleToolInputEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const { toolName, inputText } = getToolInputData(event);
+
+    if (toolName === TOOL_RENDER_UI) {
+      sourceState.currentAssistantId = undefined;
+      sourceState.generativeUIPreviewBuffer += inputText || '';
+      const payload = parseGenerativeUIPreview(sourceState.generativeUIPreviewBuffer);
+      if (payload) upsertGenerativeUIPreview(payload, event, sourceState, source);
+      return;
+    }
+
+    if (toolName === TOOL_WRITE_TODOS) {
+      sourceState.todoBuffer += inputText || '';
+      const todos = parseTodoItems(sourceState.todoBuffer);
+      if (todos.length > 0) upsertTodo(todos, event, sourceState, source);
+      return;
+    }
+
+    if (isDetailToolName(toolName)) {
+      upsertToolDetailPreview(toolName, inputText, event, sourceState, source);
+      return;
+    }
+
+    if (!inputText) {
+      return;
+    }
+
+    const last = state.messages[state.messages.length - 1];
+    if (
+      last?.event === EVENT_TOOL_INPUT &&
+      last.toolName === toolName &&
+      isSameSource(last.source, source)
+    ) {
+      updateById(last.id, msg => ({ ...msg, content: msg.content + inputText }));
+      return;
+    }
+
+    pushAssistantMessage(event, source, inputText, {
+      event: EVENT_TOOL_INPUT,
+      toolName,
+    });
+  }
+
+  function handleToolCallEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const data = event.data as Record<string, unknown>;
+    const toolName = data?.name as string | undefined;
+    const toolCallId = getToolCallId(data);
+
+    if (toolName === TOOL_WRITE_TODOS) {
+      const input = typeof data?.input === 'string' ? data.input : JSON.stringify(data?.input ?? {});
+      const todos = parseTodoItems(input);
+      finalizeTodo(todos, event, sourceState, source);
+      return;
+    }
+
+    if (toolName && isDetailToolName(toolName)) {
+      upsertToolDetailCall(toolName, data, event, sourceState, source);
+      return;
+    }
+
+    const content = formatEventContent(event);
+    if (!content) {
+      return;
+    }
+
+    pushAssistantMessage(event, source, content, {
+      event: EVENT_TOOL_CALL,
+      toolName,
+      toolCallId,
+    });
+  }
+
+  function handleToolCallResultEvent(event: ChatEvent, sourceState: SourceScopedState, source: StreamSource): void {
+    const data = event.data as Record<string, unknown>;
+    const toolName = data?.name as string | undefined;
+    const toolCallId = getToolCallId(data);
+    if (toolName === TOOL_WRITE_TODOS) return;
+
+    if (toolName && isDetailToolName(toolName)) {
+      finalizeToolDetailResult(toolName, data, event, sourceState, source);
+      return;
+    }
+
+    const content = formatEventContent(event);
+    const outputLength = typeof data?.outputLength === 'number' ? data.outputLength as number : undefined;
+    const isError = !!data?.error;
+    if (!content) {
+      return;
+    }
+
+    pushAssistantMessage(event, source, content, {
+      event: EVENT_TOOL_CALL_RESULT,
+      toolName,
+      toolCallId,
+      outputLength,
+      isError,
+    });
+  }
+
+  function handleDeliverEvent(event: ChatEvent, source: StreamSource): void {
+    const content = formatEventContent(event);
+    if (!content) {
+      return;
+    }
+
+    pushAssistantMessage(event, source, content, {
+      event: EVENT_DELIVER,
+    });
+  }
+
+  function handleSimpleAssistantEvent(event: ChatEvent, source: StreamSource): void {
+    const content = formatEventContent(event);
+    const data = event.data as Record<string, unknown> | undefined;
+    const toolName =
+      event.event === EVENT_ERROR
+        ? ((data?.toolName as string) || (data?.name as string) || undefined)
+        : ((data?.name as string) || (data?.agentName as string) || event.node);
+
+    pushAssistantMessage(event, source, content, {
+      event: event.event,
+      toolName,
+      isError: event.event === EVENT_ERROR ? true : undefined,
+    });
+  }
+
+  function applyEvent(event: ChatEvent): void {
+    const { event: type } = event;
+    const source = resolveEventSource(event);
+    const sourceState = getSourceState(source);
+
+    // subagent 的 agent-end / assistant-end 推空消息用于 UI 标记结束边界；
+    // main source 的同类事件在下方的 FILTERED_MESSAGE_EVENT_SET 中被过滤掉。
+    if ((type === EVENT_AGENT_END || type === EVENT_ASSISTANT_END) && source.kind === 'subagent') {
+      sourceState.currentAssistantId = undefined;
+      const usage = type === EVENT_ASSISTANT_END ? parseTokenUsageFromAssistantEndData(event.data) : undefined;
+      pushAssistantMessage(event, source, '', {
+        event: type,
+        ...(usage ? { tokenUsage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens } } : {}),
+      });
+      return;
+    }
+
+    // 生命周期/控制事件由前端显式过滤，不产出消息（仅对 main source 生效）。
+    if (FILTERED_MESSAGE_EVENT_SET.has(type)) {
+      sourceState.currentAssistantId = undefined;
+      return;
+    }
+
+    // ── 用户消息 ─────────────────────────────────────────────────────────────────
+    if (type === EVENT_USER) {
+      sourceState.currentAssistantId = undefined;
+      handleUserEvent(event);
+      return;
+    }
+
+    // ── todo-update 自定义事件（on_tool_start 触发，携带完整 todos 数组）────────────
+    if (type === EVENT_TODO_UPDATE) {
+      sourceState.currentAssistantId = undefined;
+      handleTodoUpdateEvent(event, sourceState, source);
+      return;
+    }
+
+    // ── generative-ui 事件（render-ui 工具产出）─────────────────────────────────────
+    if (type === EVENT_GENERATIVE_UI) {
+      sourceState.currentAssistantId = undefined;
+      handleGenerativeUIEvent(event, sourceState, source);
+      return;
+    }
+
+    // ── set-generative-ui-answer（resume 时回写用户选择）─────────────────────────────
+    if (type === EVENT_SET_GENERATIVE_UI_ANSWER) {
+      handleSetGenerativeUIAnswer(event);
+      return;
+    }
+
+    // ── assistant / thinking ──────────────────────────────────────────────────────
+    if (type === EVENT_ASSISTANT) {
+      handleAssistantEvent(event, sourceState, source);
+      return;
+    }
+
+    if (type === EVENT_THINKING) {
+      handleThinkingEvent(event, sourceState, source);
+      return;
+    }
+
+    // 非 assistant 事件重置当前 assistant 追踪
+    sourceState.currentAssistantId = undefined;
+
+    // ── context-summarized ───────────────────────────────────────────────────────
+    if (type === EVENT_CONTEXT_SUMMARIZED) {
+      const data = event.data as Record<string, unknown> | undefined;
+      const message = (data?.message as string) || 'Context 已压缩';
+      pushAssistantMessage(event, source, message, {
+        event: EVENT_CONTEXT_SUMMARIZED,
+      });
+      return;
+    }
+
+    // ── tool-input ────────────────────────────────────────────────────────────────
+    if (type === EVENT_TOOL_INPUT) {
+      handleToolInputEvent(event, sourceState, source);
+      return;
+    }
+
+    // ── tool-call ─────────────────────────────────────────────────────────────────
+    if (type === EVENT_TOOL_CALL) {
+      handleToolCallEvent(event, sourceState, source);
+      return;
+    }
+
+    // ── tool-call-result ──────────────────────────────────────────────────────────
+    if (type === EVENT_TOOL_CALL_RESULT) {
+      handleToolCallResultEvent(event, sourceState, source);
+      return;
+    }
+
+    // ── deliver ───────────────────────────────────────────────────────────────────
+    if (type === EVENT_DELIVER) {
+      handleDeliverEvent(event, source);
+      return;
+    }
+
+    // ── error / tool-output ───────────────────────────────────────────────────────
+    if (type === EVENT_ERROR || type === EVENT_TOOL_OUTPUT) {
+      handleSimpleAssistantEvent(event, source);
+    }
+  }
+
+  return {
+    applyEvent,
+    /** 返回当前消息列表的浅拷贝（供 setMessages 使用） */
+    getMessages: (): Message[] => [...state.messages],
+    getTodoTree: (): TodoTreeItem[] => [...state.todoTree],
+  };
+}

@@ -1,0 +1,263 @@
+'use client';
+
+import { useState, useRef, useCallback } from 'react';
+import {
+  Renderer,
+  StateProvider,
+  ActionProvider,
+  VisibilityProvider,
+  ValidationProvider,
+  createStateStore,
+} from '@json-render/react';
+import { registry } from '@/lib/generative-ui/registry';
+import { api } from '@/lib/api';
+import { ChatEvent } from '@/types';
+import {
+  EVENT_ASSISTANT,
+  EVENT_GENERATIVE_UI,
+  EVENT_ERROR,
+  EVENT_END,
+} from '@/lib/const';
+
+interface UISpec {
+  root: string;
+  elements: Record<string, unknown>;
+  state?: Record<string, unknown>;
+}
+
+interface GenerativeUIData {
+  title?: string;
+  spec?: UISpec;
+  interactive?: boolean;
+  interruptId?: string;
+}
+
+interface StreamMessage {
+  type: 'assistant' | 'generative-ui' | 'error' | 'status';
+  content?: string;
+  uiData?: GenerativeUIData;
+}
+
+export default function GenerativeUIAgentTestPage() {
+  const [messages, setMessages] = useState<StreamMessage[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [rawEvents, setRawEvents] = useState<string[]>([]);
+  const threadIdRef = useRef<string | undefined>(undefined);
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      const formData = new FormData(e.currentTarget);
+      const prompt = (formData.get('prompt') as string)?.trim();
+      if (!prompt || isStreaming) return;
+
+      setIsStreaming(true);
+      setMessages([]);
+      setRawEvents([]);
+
+      let buffer = '';
+      let receivedLength = 0;
+      let assistantText = '';
+
+      const processEvent = (event: ChatEvent) => {
+        setRawEvents((prev) => [...prev, JSON.stringify(event)]);
+
+        switch (event.event) {
+          case EVENT_ASSISTANT: {
+            const content = (event.data as { content?: string })?.content || '';
+            assistantText += content;
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last?.type === 'assistant') {
+                return [...prev.slice(0, -1), { type: 'assistant', content: assistantText }];
+              }
+              return [...prev, { type: 'assistant', content: assistantText }];
+            });
+            break;
+          }
+
+          case EVENT_GENERATIVE_UI: {
+            const uiData = event.data as GenerativeUIData;
+            setMessages((prev) => [...prev, { type: 'generative-ui', uiData }]);
+            assistantText = '';
+            break;
+          }
+
+          case EVENT_ERROR: {
+            const errMsg =
+              (event.data as { message?: string })?.message || String(event.data);
+            setMessages((prev) => [...prev, { type: 'error', content: errMsg }]);
+            break;
+          }
+
+          case EVENT_END: {
+            break;
+          }
+        }
+      };
+
+      try {
+        await api.post(
+          '/generative-ui/agent',
+          { prompt, threadId: threadIdRef.current },
+          {
+            onDownloadProgress: (progressEvent) => {
+              const xhr = progressEvent.event?.target as XMLHttpRequest | null;
+              if (!xhr) return;
+              const response = xhr.responseText;
+              const chunk = response.slice(receivedLength);
+              receivedLength = response.length;
+              buffer += chunk;
+
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                try {
+                  const raw = JSON.parse(trimmed) as Partial<ChatEvent> & Record<string, unknown>;
+                  processEvent({
+                    event: (raw.event as ChatEvent['event']) || EVENT_ERROR,
+                    data: raw.data,
+                    node: typeof raw.node === 'string' ? raw.node : undefined,
+                    timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : undefined,
+                  });
+                } catch {
+                  // partial JSON, put back
+                  buffer = trimmed + '\n' + buffer;
+                }
+              }
+            },
+          },
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setMessages((prev) => [...prev, { type: 'error', content: msg }]);
+      } finally {
+        setIsStreaming(false);
+      }
+    },
+    [isStreaming],
+  );
+
+  const clear = useCallback(() => {
+    setMessages([]);
+    setRawEvents([]);
+    threadIdRef.current = undefined;
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-background p-8">
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Generative UI — Agent Test</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Agent-based: LLM agent calls render-ui tool to generate UI components
+            </p>
+          </div>
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={clear}
+              className="rounded border px-3 py-1 text-sm text-muted-foreground hover:bg-muted"
+            >
+              清除
+            </button>
+          )}
+        </div>
+
+        {/* Input form */}
+        <form onSubmit={handleSubmit} className="mb-8 flex gap-2">
+          <input
+            name="prompt"
+            placeholder="描述你想要的 UI，例如：生成一个用户注册表单"
+            className="flex-1 rounded border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+            disabled={isStreaming}
+          />
+          <button
+            type="submit"
+            disabled={isStreaming}
+            className="rounded bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {isStreaming ? 'Agent 生成中…' : '生成'}
+          </button>
+        </form>
+
+        {/* Messages */}
+        <div className="space-y-4">
+          {messages.map((msg, i) => {
+            if (msg.type === 'assistant' && msg.content) {
+              return (
+                <div key={i} className="rounded border bg-muted/30 px-4 py-3 text-sm">
+                  {msg.content}
+                </div>
+              );
+            }
+
+            if (msg.type === 'generative-ui' && msg.uiData?.spec) {
+              const spec = msg.uiData.spec;
+              return (
+                <div key={i} className="rounded border p-4">
+                  {msg.uiData.title && (
+                    <h3 className="mb-3 text-sm font-medium text-muted-foreground">
+                      {msg.uiData.title}
+                    </h3>
+                  )}
+                  <StateProvider store={createStateStore((spec.state ?? {}) as Record<string, unknown>)}>
+                    <ValidationProvider>
+                      <VisibilityProvider>
+                        <ActionProvider handlers={{}}>
+                          <Renderer spec={spec as any} registry={registry} />
+                        </ActionProvider>
+                      </VisibilityProvider>
+                    </ValidationProvider>
+                  </StateProvider>
+                </div>
+              );
+            }
+
+            if (msg.type === 'error') {
+              return (
+                <div
+                  key={i}
+                  className="rounded border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                >
+                  {msg.content}
+                </div>
+              );
+            }
+
+            return null;
+          })}
+        </div>
+
+        {/* Streaming indicator */}
+        {isStreaming && messages.length === 0 && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
+            Agent 正在思考并生成 UI...
+          </div>
+        )}
+
+        {/* Debug: raw events */}
+        {rawEvents.length > 0 && (
+          <details className="mt-8 rounded border p-4">
+            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+              Raw SSE events ({rawEvents.length} events)
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-auto text-xs leading-relaxed text-muted-foreground">
+              {rawEvents.map((evt) => {
+                try {
+                  return JSON.stringify(JSON.parse(evt), null, 2);
+                } catch {
+                  return evt;
+                }
+              }).join('\n---\n')}
+            </pre>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}

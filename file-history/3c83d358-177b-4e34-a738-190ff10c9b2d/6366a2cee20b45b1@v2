@@ -1,0 +1,183 @@
+import { useCallback, useRef } from 'react';
+import { Message, ChatEvent, TodoTreeItem } from '@/types';
+import { sendMessage } from '@/lib/api';
+import { generateId } from '@/lib/chatUtils';
+import { createMessageProcessor } from '@/lib/messageProcessor';
+import { parseTokenUsageFromAssistantEndData, type TokenUsageSnapshot } from '@/lib/tokenUsage';
+import {
+  EVENT_ASSISTANT,
+  EVENT_ASSISTANT_END,
+  EVENT_CONVERSATION_CREATE,
+  EVENT_USER,
+  ModelId,
+} from '@/lib/const';
+
+interface UseMessageStreamOptions {
+  currentId: string | undefined;
+  selectedModel: ModelId;
+  messages: Message[];
+  isLoading: boolean;
+  input: string;
+  setInput: (v: string) => void;
+  setIsLoading: (v: boolean) => void;
+  setMessages: (msgs: Message[]) => void;
+  setTodoTree: (tree: TodoTreeItem[]) => void;
+  setTokenUsage: React.Dispatch<React.SetStateAction<TokenUsageSnapshot | undefined>>;
+  setRawCurrentId: (id: string) => void;
+  skipNextHistoryLoadRef: React.MutableRefObject<boolean>;
+  onScrollToBottom: (behavior?: ScrollBehavior) => void;
+  onConversationsRefresh: () => void;
+  onError?: (error: Error) => void;
+}
+
+export function useMessageStream({
+  currentId,
+  selectedModel,
+  messages,
+  isLoading,
+  input,
+  setInput,
+  setIsLoading,
+  setMessages,
+  setTodoTree,
+  setTokenUsage,
+  setRawCurrentId,
+  skipNextHistoryLoadRef,
+  onScrollToBottom,
+  onConversationsRefresh,
+  onError,
+}: UseMessageStreamOptions) {
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  const createStreamHandler = useCallback((opts: {
+    currentMessages: Message[];
+    isNewChat: boolean;
+    onConversationCreate: (id: string) => void;
+  }) => {
+    const processor = createMessageProcessor(opts.currentMessages);
+    let hasScrolledToFirstAssistant = false;
+
+    return (event: ChatEvent) => {
+      if (event.event === EVENT_CONVERSATION_CREATE) {
+        const conversationId = (event.data as Record<string, unknown> | undefined)?.conversationId;
+        if (typeof conversationId === 'string' && conversationId) {
+          opts.onConversationCreate(conversationId);
+        }
+        return;
+      }
+      if (event.event === EVENT_ASSISTANT_END && (!event.source || event.source.kind === 'main') && !event.subagentNamespace) {
+        const usage = parseTokenUsageFromAssistantEndData(event.data);
+        if (usage) {
+          setTokenUsage(usage);
+        }
+      }
+      processor.applyEvent(event);
+      setMessages(processor.getMessages());
+      setTodoTree(processor.getTodoTree());
+      if (!hasScrolledToFirstAssistant && event.event === EVENT_ASSISTANT) {
+        hasScrolledToFirstAssistant = true;
+        onScrollToBottom();
+      }
+    };
+  }, [setMessages, setTodoTree, setTokenUsage, onScrollToBottom]);
+
+  const handleSend = useCallback(async () => {
+    if (!input.trim() || isLoading) return;
+
+    const pendingAskUser = [...messages]
+      .reverse()
+      .find(m => m.askUser?.kind === 'chat' && !m.askUser.answer)?.askUser;
+
+    const userMsg: Message = {
+      id: generateId(),
+      role: 'user',
+      content: input,
+      timestamp: Date.now(),
+      event: EVENT_USER,
+    };
+
+    const snapshot = [...messages, userMsg];
+    setMessages(snapshot);
+    onScrollToBottom();
+    setInput('');
+    setIsLoading(true);
+
+    const isNewChat = !currentId;
+    let chatId = currentId;
+
+    try {
+      await sendMessage(
+        pendingAskUser
+          ? { model: selectedModel, id: chatId, resume: { interruptId: pendingAskUser.interruptId, answer: userMsg.content } }
+          : { model: selectedModel, text: userMsg.content, id: chatId },
+        createStreamHandler({
+          currentMessages: snapshot,
+          isNewChat,
+          onConversationCreate: (id: string) => {
+            chatId = id;
+            if (isNewChat) {
+              skipNextHistoryLoadRef.current = true;
+              setRawCurrentId(id);
+            }
+          },
+        }),
+      );
+      if (isNewChat) await onConversationsRefresh();
+    } catch (error) {
+      console.error(error);
+      onErrorRef.current?.(error as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [
+    input, isLoading, currentId, messages, selectedModel,
+    createStreamHandler, onScrollToBottom, setInput, setIsLoading, setMessages,
+    skipNextHistoryLoadRef, setRawCurrentId, onConversationsRefresh,
+  ]);
+
+  const handleAskUserSubmit = useCallback(async (interruptId: string | undefined, values: string | Record<string, unknown>) => {
+    if (!currentId || isLoading) return;
+
+    const snapshot = [...messages];
+    for (let i = snapshot.length - 1; i >= 0; i--) {
+      if (snapshot[i].askUser?.interruptId === interruptId) {
+        snapshot[i] = { ...snapshot[i], askUser: { ...snapshot[i].askUser!, answer: values } };
+        break;
+      }
+    }
+    setMessages(snapshot);
+    onScrollToBottom();
+    setIsLoading(true);
+
+    let chatId = currentId;
+    try {
+      await sendMessage(
+        { model: selectedModel, id: chatId, resume: { interruptId, answer: values } },
+        createStreamHandler({
+          currentMessages: snapshot,
+          isNewChat: false,
+          onConversationCreate: (id: string) => {
+            chatId = id;
+            if (!currentId) {
+              skipNextHistoryLoadRef.current = true;
+              setRawCurrentId(id);
+            }
+          },
+        }),
+      );
+      onConversationsRefresh();
+    } catch (error) {
+      console.error(error);
+      onErrorRef.current?.(error as Error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [
+    currentId, isLoading, messages, selectedModel,
+    createStreamHandler, onScrollToBottom, setIsLoading, setMessages,
+    skipNextHistoryLoadRef, setRawCurrentId, onConversationsRefresh,
+  ]);
+
+  return { handleSend, handleAskUserSubmit };
+}

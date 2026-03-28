@@ -1,0 +1,69 @@
+import { useRef, useCallback, useMemo } from 'react';
+import {
+  Renderer,
+  StateProvider,
+  ActionProvider,
+  VisibilityProvider,
+  ValidationProvider,
+  createStateStore,
+} from '@json-render/react';
+import { registry } from '@/lib/generative-ui/registry';
+import { buildSafeSpec } from '@/lib/generative-ui/build-safe-spec';
+
+interface GenerativeUICardProps {
+  spec: Record<string, unknown>;
+  initialState?: Record<string, unknown>;
+  interactive?: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+  onSubmit?: (formData: Record<string, unknown> | null) => void;
+}
+
+const NOOP_HANDLERS = {};
+
+export function GenerativeUICard({
+  spec: rawSpec,
+  initialState,
+  interactive = false,
+  disabled,
+  loading = false,
+  onSubmit,
+}: GenerativeUICardProps) {
+  const spec = buildSafeSpec(rawSpec);
+  const initState = (initialState ?? (rawSpec.state as Record<string, unknown>) ?? {}) as Record<string, unknown>;
+  const storeRef = useRef(createStateStore(initState));
+
+  const handlers = useCallback(
+    () => ({
+      submit: () => {
+        if (disabled) return;
+        const snapshot = storeRef.current.getSnapshot();
+        onSubmit?.(snapshot as Record<string, unknown>);
+      },
+      cancel: () => {
+        if (disabled) return;
+        onSubmit?.(null);
+      },
+    }),
+    [disabled, onSubmit],
+  );
+
+  const actionHandlers = useMemo(
+    () => (interactive && onSubmit ? handlers() : NOOP_HANDLERS),
+    [interactive, onSubmit, handlers],
+  );
+
+  if (!spec) return null;
+
+  return (
+    <StateProvider store={storeRef.current}>
+      <ValidationProvider>
+        <VisibilityProvider>
+          <ActionProvider handlers={actionHandlers}>
+            <Renderer spec={spec} registry={registry} loading={loading} />
+          </ActionProvider>
+        </VisibilityProvider>
+      </ValidationProvider>
+    </StateProvider>
+  );
+}

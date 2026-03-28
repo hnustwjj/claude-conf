@@ -1,0 +1,71 @@
+import { MemorySaver } from "@langchain/langgraph";
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { createDeepAgent } from "deepagents";
+import { createAgent, createMiddleware, DynamicStructuredTool } from "langchain";
+import { SystemMessage } from "@langchain/core/messages";
+import { createToolErrorMiddleware } from "../middleware/tool-error.middleware";
+import { ConversationSandboxManager } from '../sandbox/conversation-sandbox.manager';
+import { BaseLanguageModel } from "@langchain/core/language_models/base";
+import { SANDBOX_SKILLS_ROOT } from '../sandbox/sandbox-skills.config';
+import { configSchema } from "../../config/config.schema";
+
+const memory = new MemorySaver();
+
+const VFS_RELATIVE_PATH_PROMPT = `## Important: Use Relative Paths in Execute Tool
+
+The sandbox environment does NOT support absolute paths in shell commands.
+When using the \`execute\` tool, you MUST use **relative paths** (without leading \`/\`) for all file operations.
+
+For example:
+- CORRECT: \`execute(command="python -c \\"import json; f=open('large_tool_results/get_dashboard_by_uid:5'); data=json.load(f); print(data)\\\"")\`
+- WRONG: \`execute(command="python -c \\"import json; f=open('/large_tool_results/get_dashboard_by_uid:5'); data=json.load(f); print(data)\\\"")\`
+
+This applies to ALL file paths used inside execute commands, including paths to files in \`large_tool_results/\` and any other local files.
+Note: The filesystem tools (read_file, write_file, ls, etc.) still use absolute paths starting with \`/\` — this restriction only applies to the \`execute\` tool.`;
+
+/**
+ * Middleware that instructs the LLM to use relative paths in execute tool commands,
+ * because the VFS sandbox environment does not support absolute paths in shell execution.
+ */
+const vfsRelativePathMiddleware = createMiddleware({
+  name: 'VfsRelativePathMiddleware',
+  wrapModelCall: async (request, handler) => {
+    const additionalPrompt = new SystemMessage({ content: VFS_RELATIVE_PATH_PROMPT });
+    return handler({
+      ...request,
+      messages: [additionalPrompt, ...request.messages],
+    });
+  },
+});
+
+export default async function createSimpleDeepAgent(
+  model: BaseLanguageModel,
+  conversationId: string,
+  sandboxManager: ConversationSandboxManager,
+): Promise<ReturnType<typeof createAgent>> {
+  const session = await sandboxManager.getConversationSandbox(conversationId);
+  const client = new MultiServerMCPClient({
+    grafana: {
+      transport: 'sse',
+      url: configSchema.GRAFANA_MCP_URL!,
+    },
+  });
+
+  // 过滤，只剩下
+  const FILTER_TOOLS = ['search_dashboards', 'list_datasources', 'get_dashboard_panel_queries', 'query_prometheus', 'list_prometheus_label_names', 'generate_deeplink', 'get_dashboard_by_uid'];
+  const allMcpTools = (await client.getTools()).filter(tool => FILTER_TOOLS.includes(tool.name)) as DynamicStructuredTool[]
+
+  const middleware = [
+    createToolErrorMiddleware(),
+    vfsRelativePathMiddleware,
+  ]
+
+  return createDeepAgent({
+    model: model,
+    tools: allMcpTools,
+    middleware,
+    backend: session.backend,
+    checkpointer: memory,
+    skills: [SANDBOX_SKILLS_ROOT]
+  });
+}

@@ -1,0 +1,343 @@
+---
+name: grafana-anomaly-analysis
+description: Analyze Grafana dashboards and panels for anomalies through the project's simple-deep-agent Grafana MCP workflow. Use whenever the user asks to investigate Grafana exceptions, spikes, drops, oscillation, sustained shifts, regressions, missing data, noisy metrics, recent trend changes, or dashboard health, especially when the task requires resolving dashboard, datasource, filters, time range, and target panels before dispatching one subagent per panel and returning a consolidated report.
+---
+
+# Grafana Anomaly Analysis
+
+Follow a strict two-phase workflow:
+
+1. Resolve all analysis inputs in the main agent.
+2. Dispatch one subagent per panel only after the inputs are complete, and run those panel subagents concurrently when more than one panel is in scope.
+
+Do not let subagents repeat dashboard discovery.
+
+## Available Tooling
+
+Assume this skill runs inside the project's `simple-deep-agent` and only has these Grafana MCP tools:
+
+- `search_dashboards`
+- `get_dashboard_by_uid`
+- `list_datasources`
+- `get_dashboard_panel_queries`
+- `list_prometheus_label_names`
+- `query_prometheus`
+- `generate_deeplink`
+
+Do not rely on any other Grafana capability unless the environment explicitly exposes it.
+
+## Main-Agent Workflow
+
+Always execute in this order:
+
+1. Determine the dashboard.
+2. Determine the datasource.
+3. Determine the filter conditions.
+4. Determine the time range.
+5. Determine which panels should be analyzed.
+6. Fetch panel metadata and the full query for each target panel.
+7. If anything is still unresolved, present one combined confirmation block to the user.
+8. Dispatch one subagent per confirmed panel, concurrently across panels whenever possible.
+9. Merge all panel findings into a final report.
+
+Do not skip ahead to per-panel analysis until the full handoff payload is ready.
+
+## Parallel Dispatch Strategy
+
+Use panel-level parallelism as the default execution strategy.
+
+- Keep one panel mapped to one subagent.
+- If a panel contains multiple PromQL queries, expressions, or related series, keep them inside that same panel subagent rather than splitting them across additional subagents.
+- If more than one panel is ready for analysis, dispatch those panel subagents concurrently rather than serially.
+- Create one independent subagent task per panel. If 6 panels are in scope, create 6 panel-analysis subagents rather than 1 subagent that loops over 6 panels.
+- Only fall back to serial dispatch when a concrete dependency exists between panels or the runtime explicitly cannot parallelize.
+
+The intended unit of parallelism is the panel, not the individual query inside a panel and not a multi-panel batch handled by one subagent.
+
+## Resolution Rules
+
+Resolve each input as aggressively as possible before asking the user:
+
+- Dashboard: prefer an exact UID, then an exact title, then strong title matches from `search_dashboards`.
+- Datasource: prefer an explicit user choice; otherwise infer from dashboard queries or available datasource names, but only treat it as resolved when the choice is unique, concrete, and explicitly confirmed by the user rather than merely coming from a dashboard variable such as `${datasource}`.
+- Filters: preserve exact labels and values from the request; when the request is vague, discover relevant label names before asking.
+- Time range: preserve any explicit range from the user; otherwise infer the shortest reasonable range for anomaly analysis and mark it as a recommendation.
+- Panels: prefer the panels explicitly named by the user; if none are named, narrow to the most relevant panels instead of defaulting to the entire dashboard.
+
+Never invent a dashboard, datasource, filter, time range, or panel.
+
+Treat the datasource as unresolved whenever any of these are true:
+
+- the query still references a variable placeholder such as `${datasource}`
+- more than one datasource remains plausible
+- the dashboard uses a generic Prometheus or VictoriaMetrics datasource variable and the concrete value is still unknown
+- the concrete datasource comes only from the dashboard variable's current value or default value, but the user has not explicitly confirmed it
+- the concrete datasource comes from dashboard templating state even if there is only one visible current value or one obvious recommended value
+- the inferred datasource depends on guesswork rather than a unique match
+
+Treat the filter set as unresolved whenever the effective value comes only from dashboard variable current values or defaults and the user has not explicitly confirmed that those values are the intended scope.
+
+## Mandatory Datasource Confirmation
+
+Datasource confirmation is mandatory whenever the dashboard uses a datasource template variable.
+
+- Treat dashboard templating state as discovery evidence, not as final confirmation.
+- A current value, default value, or only available datasource option is still only a candidate until the user confirms it.
+- A successful lookup in `list_datasources` only proves the datasource exists; it does not count as user confirmation.
+- Do not place datasource under an "already confirmed" or "already determined" section unless the user explicitly confirmed it in the conversation.
+- If datasource is template-driven, ask the user to confirm it even when the recommended option is obvious.
+
+Use wording like:
+
+```text
+Datasource
+Status: needs user confirmation
+Options:
+- prometheus-prod (from dashboard default/current value)
+Recommended: prometheus-prod
+Reason: the dashboard currently defaults to this datasource, but I must ask you to confirm whether to keep it or switch to another datasource before analysis
+```
+
+## Missing-Input Confirmation
+
+This skill uses a gather-first confirmation model.
+
+- Do not interrupt the workflow every time one input is missing.
+- First resolve everything you can from the user request and the available Grafana MCP tools.
+- Then present the remaining missing or ambiguous inputs in one consolidated confirmation block.
+- Once a confirmation block is shown, stop and wait for the user's reply before doing any further analysis.
+- Do not treat a dashboard variable's current value, default value, or a successful datasource existence check as user confirmation.
+- Do not silently upgrade a datasource from "candidate" to "confirmed" after reading dashboard templating state.
+
+For every unresolved field, include:
+
+- `status`: what is still missing or ambiguous
+- `options`: the concrete candidates, if any
+- `recommended`: the best default, if one exists
+- `reason`: why confirmation is still needed
+
+Keep the confirmation block compact and selection-oriented.
+
+Use this structure:
+
+```text
+I need confirmation for the remaining analysis inputs:
+
+1. Dashboard
+Status: ambiguous between 2 matches
+Options:
+- <option 1>
+- <option 2>
+Recommended: <best option or "none">
+Reason: <why it cannot be resolved safely>
+
+2. Datasource
+Status: missing
+Options:
+- <option 1>
+- <option 2>
+Recommended: <best option or "none">
+Reason: <why it cannot be resolved safely>
+```
+
+If a field has no credible options, state that directly and ask the user to provide it.
+
+When a datasource or filter value comes from dashboard templating state, present it like this:
+
+```text
+Datasource
+Status: needs user confirmation
+Options:
+- vmp-prod (from dashboard variable current value)
+Recommended: vmp-prod
+Reason: the dashboard currently points to this datasource, but the user has not explicitly confirmed that this is the datasource to analyze
+```
+
+The same rule applies to service, cluster, namespace, or other filter variables populated from dashboard state.
+
+## Blocking Rules For Unresolved Inputs
+
+If any required field remains unresolved after discovery, do not continue into analysis.
+
+This is especially strict for datasource selection.
+If the datasource is unresolved, you must stop after presenting the confirmation block and wait for the user.
+
+If you have already gathered enough information to present datasource or filter options, the confirmation block itself must be the end of that turn.
+Do not continue with extra tool calls, option validation, panel discovery, or narrative analysis after emitting the confirmation request.
+
+Before the user confirms datasource, do not:
+
+- list datasource inside a section of confirmed inputs
+- say "Datasource: current setting is ..."
+- proceed to panel discovery
+- create panel-analysis tasks
+
+Before the user confirms the remaining inputs, do not:
+
+- select final target panels
+- announce that you will analyze a specific panel set or metric set
+- create or describe panel-analysis tasks as if they are ready to run
+- dispatch subagents
+- call `query_prometheus`
+- generate final anomaly conclusions
+
+You may still inspect dashboard metadata and list candidate options during discovery, but you must not behave as if analysis has started.
+
+## Panel Selection Rules
+
+Panel scope strongly affects cost and signal quality.
+
+- If the user explicitly names panels or panel groups, treat that as authoritative.
+- If the user asks about a symptom but not specific panels, identify the most relevant panel candidates and ask for confirmation.
+- Do not silently analyze every panel on a large dashboard.
+- Prefer a smaller, defensible panel set over a broad speculative sweep.
+
+Candidate panels may be proposed before confirmation, but they are only candidates.
+Do not present them as the final analysis scope until all unresolved required inputs, especially datasource, are confirmed.
+
+Before dispatching subagents, capture for each target panel:
+
+- panel id
+- panel group, if present
+- panel title
+- panel type
+- panel config snapshot with the fields needed for analysis
+- full panel query
+- any panel identifier needed for deeplinks
+
+If `get_dashboard_panel_queries` returns a preview or stores the full result under `large_tool_results/...`, read the saved file and recover the full query before dispatching.
+
+If you call `get_dashboard_by_uid` during discovery, do it in the main agent and reuse that result to extract each target panel's config snapshot.
+Do not make subagents call `get_dashboard_by_uid` again for the same dashboard.
+
+When multiple panels are confirmed, prepare all handoff payloads first, then create one subagent task per panel.
+Do not package multiple panels into a single catch-all subagent request.
+
+## Required Inputs Before Dispatch
+
+Before dispatching a panel-analysis subagent, the main agent must already have all of the following:
+
+- dashboard title
+- dashboard UID or ID
+- panel id
+- panel group or an explicit statement that no group exists
+- panel title
+- panel type
+- panel config snapshot
+- full panel query
+- datasource
+- filter conditions
+- time range
+- analysis goal
+
+If any item is missing, continue discovery or ask the user. Do not dispatch yet.
+
+## Subagent Rules
+
+When acting as a single-panel subagent, treat the handoff payload as authoritative.
+
+- Do not re-locate the dashboard.
+- Do not call `get_dashboard_by_uid`.
+- Do not re-fetch dashboard structure.
+- Do not re-fetch panel query metadata.
+- Do not change datasource, filters, or time range unless the parent task explicitly tells you to.
+- Analyze only the assigned panel.
+- Analyze all queries, expressions, and related series for that panel within the same subagent.
+- Treat the panel config snapshot as the source of truth for panel metadata and visualization settings.
+- Use `query_prometheus` to inspect the assigned panel's behavior over the provided time range.
+- Use `generate_deeplink` only for the assigned panel and resolved filters.
+
+A panel-analysis subagent may inspect the series data and produce a focused deeplink, but it must not restart discovery or re-read the dashboard definition.
+Do not split one panel into multiple subagents just because it has multiple underlying queries.
+Do not accept ownership of multiple panels in one subagent.
+
+## Required Handoff Template
+
+When dispatching a panel-analysis subagent, use this task description shape:
+
+```text
+Task: Analyze one Grafana panel for anomalies.
+
+Authoritative inputs:
+- Dashboard: <dashboard title>
+- Dashboard UID/ID: <uid or id>
+- Panel ID: <panel id>
+- Panel Group: <group name or "none">
+- Panel Title: <panel title>
+- Panel Type: <panel type>
+- Datasource: <datasource>
+- Filters: <filters>
+- Time Range: <time range>
+- Analysis Goal: <goal>
+- Panel Config Snapshot:
+<normalized panel config excerpt with datasource ref, targets, expressions, transformations, field config, units, thresholds, legend config, and any panel options needed for interpretation>
+- Panel Query:
+<full panel query>
+
+Rules:
+- Treat the provided dashboard, panel metadata, panel config snapshot, datasource, filters, time range, and full panel query as authoritative.
+- Do not call tools to re-locate the dashboard or re-fetch panel metadata.
+- Do not call `get_dashboard_by_uid`.
+- Do not call tools to re-fetch panel queries.
+- Analyze only this panel.
+- If this panel has multiple queries or expressions, analyze all of them within this same subagent.
+- If you generate a deeplink with time parameters, use millisecond timestamps.
+- In the report body, use human-readable UTC+8 wording rather than raw epoch values.
+
+Deliverables:
+- panel summary
+- anomaly findings
+- supporting evidence from the queried series
+- likely causes or grounded hypotheses
+- a focused deeplink for this panel and filter set
+```
+
+Do not replace the full panel query with a summary when the full query is available.
+
+When multiple panels are in scope, issue multiple handoffs following this template, one handoff per panel.
+Do not send a single subagent a list of panels to analyze.
+
+## What To Look For In Each Panel
+
+Inspect for:
+
+- spikes or sharp short-lived peaks
+- sudden drops
+- sustained level shifts
+- widening volatility or oscillation
+- periodic jitter that becomes materially worse than baseline
+- flatlines or missing data segments
+- divergence between related series
+- abrupt changes after a long stable period
+- regressions that align with a recent deploy or other reported incident window
+
+Describe, when supported by the data:
+
+- what changed
+- when it changed
+- whether the change is isolated, repeated, or sustained
+- whether the panel looks degraded, noisy, capacity-constrained, or structurally shifted
+
+Avoid weak phrasing such as "there may be an anomaly." State the concrete pattern you observed.
+
+## Deeplink Rules
+
+When generating a deeplink:
+
+- keep it scoped to the resolved dashboard, panel, datasource, filters, and time range
+- prefer a panel-focused deeplink rather than a broad dashboard entry point
+- use millisecond timestamps if the deeplink carries explicit time bounds
+
+## Final Report
+
+The final merged report should contain:
+
+- a short analysis scope summary
+- one section per panel
+- the main anomaly findings for that panel
+- supporting evidence and likely causes or hypotheses
+- a focused deeplink for that panel
+- a short cross-panel summary that explains whether the anomalies appear related
+
+Use human-readable UTC+8 timestamps in prose.
+Do not expose raw epoch values in the narrative.

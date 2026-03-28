@@ -1,0 +1,25 @@
+import type { Spec } from '@json-render/core';
+
+/**
+ * Filter the streamed spec to only include elements with valid type/props,
+ * enabling progressive rendering as the AI response builds up.
+ * Returns null if the spec is not yet renderable.
+ */
+export function buildSafeSpec(rawSpec: Record<string, unknown>): Spec | null {
+  if (!rawSpec?.root || !rawSpec?.elements) return null;
+  const elements = rawSpec.elements as Record<string, Record<string, unknown>>;
+  const rootEl = elements[rawSpec.root as string];
+  if (!rootEl?.type || rootEl?.props == null) return null;
+
+  const safeElements: Record<string, unknown> = {};
+  for (const [key, el] of Object.entries(elements)) {
+    if (el?.type && el?.props != null) {
+      safeElements[key] = el;
+    }
+  }
+  return {
+    root: rawSpec.root,
+    elements: safeElements,
+    ...(rawSpec.state ? { state: rawSpec.state } : {}),
+  } as unknown as Spec;
+}

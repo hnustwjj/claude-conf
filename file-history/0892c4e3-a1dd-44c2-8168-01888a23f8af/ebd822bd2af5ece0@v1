@@ -1,0 +1,476 @@
+import { AIMessageChunk, isAIMessageChunk } from '@langchain/core/messages';
+import { randomUUID } from 'crypto';
+import { appendFile } from 'fs/promises';
+import path from 'path';
+import {
+  ALLOW_TOOL_INPUT,
+  ENodeName,
+  EToolName,
+  SUMMARIZED_TOOL_CALL_RESULT_NAMES,
+  TalkableAgents,
+} from '../../common/constant';
+import { IAskUserPayload } from '../../common/ask-user';
+import { log } from '../../logger';
+import { IGraphEvent } from '../agents.service';
+import {
+  extractTokenUsage,
+  extractToolError,
+  getToolArgs,
+  parseChunk,
+  resolveToolOutput,
+  tryJSONStringify,
+} from './utils';
+
+const STREAM_DEBUG = process.env.STREAM_DEBUG === 'true';
+const STREAM_DEBUG_INCLUDE_DATA = process.env.STREAM_DEBUG_INCLUDE_DATA === 'true';
+const TASK_TOOL_NAME = 'task';
+
+type StreamMetadata = Record<string, unknown>;
+type StreamSubagentInfo = { type: string; namespace: string };
+type StreamContext = {
+  run_id: string;
+  name: string;
+  data: Record<string, unknown>;
+  node: ENodeName | undefined;
+  metadata?: StreamMetadata;
+};
+
+export interface ToolInputState {
+  inputtingTool: string | undefined;
+  subagentNamespaces?: Record<string, string>;
+}
+
+function makeEvent<T>(
+  event: string,
+  node: ENodeName | undefined,
+  data?: T,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent<T> {
+  return {
+    id: randomUUID(),
+    timestamp: performance.now(),
+    event,
+    node,
+    data,
+    ...(subagent ? { subagent_type: subagent.type, subagent_namespace: subagent.namespace } : {}),
+  };
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function getRegisteredSubagentNamespaces(state: ToolInputState): Record<string, string> {
+  if (!state.subagentNamespaces) {
+    state.subagentNamespaces = {};
+  }
+  return state.subagentNamespaces;
+}
+
+function expandNamespaceToken(token: string): string[] {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (!trimmed.includes(':')) {
+    return [trimmed];
+  }
+  const segmented = trimmed.match(/[a-zA-Z_]+:[^:|,]+/g);
+  return segmented?.length ? segmented.map(segment => segment.trim()).filter(Boolean) : [trimmed];
+}
+
+function extractNamespace(metadata?: StreamMetadata): string[] {
+  if (!metadata) {
+    return [];
+  }
+
+  const rawCandidates: unknown[] = [
+    metadata.namespace,
+    metadata.langgraph_path,
+    metadata.checkpoint_ns,
+  ];
+
+  const flattened = rawCandidates.flatMap(candidate => {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+    if (typeof candidate === 'string') {
+      return candidate.split(/[|,]/g);
+    }
+    return [];
+  });
+
+  const namespace = flattened
+    .flatMap(value => (typeof value === 'string' ? expandNamespaceToken(value) : []))
+    .map(segment => segment.trim())
+    .filter(segment => segment && segment !== 'root');
+
+  return Array.from(new Set(namespace));
+}
+
+export function getStreamSource(
+  metadata?: StreamMetadata,
+  fallbackNode?: ENodeName,
+): { kind: 'main' | 'subagent'; key: string; label?: string; namespace?: string[] } {
+  const namespace = extractNamespace(metadata);
+  const subagentKey = namespace.find(segment => segment.startsWith('tools:'));
+  const label = asString(metadata?.lc_agent_name) ?? fallbackNode;
+
+  if (subagentKey) {
+    return {
+      kind: 'subagent',
+      key: subagentKey,
+      label,
+      namespace,
+    };
+  }
+
+  return {
+    kind: 'main',
+    key: 'main',
+    label,
+    namespace,
+  };
+}
+
+function getToolsNamespace(metadata?: StreamMetadata): string | undefined {
+  return extractNamespace(metadata).find(segment => segment.startsWith('tools:'));
+}
+
+function parseTaskSubagentType(input: string | undefined): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(input) as Record<string, unknown>;
+    return typeof parsed.subagent_type === 'string' ? parsed.subagent_type : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function registerTaskSubagentNamespace(
+  toolName: string,
+  data: Record<string, unknown>,
+  metadata: StreamMetadata | undefined,
+  state: ToolInputState,
+): void {
+  if (toolName !== TASK_TOOL_NAME) {
+    return;
+  }
+
+  const toolsNamespace = getToolsNamespace(metadata);
+  const rawInput = ((data.input as { input?: string } | undefined)?.input) || undefined;
+  const subagentType = parseTaskSubagentType(rawInput);
+  if (!toolsNamespace || !subagentType) {
+    return;
+  }
+  getRegisteredSubagentNamespaces(state)[toolsNamespace] = subagentType;
+}
+
+function resolveSubagentInfo(
+  metadata: StreamMetadata | undefined,
+  state: ToolInputState,
+): StreamSubagentInfo | undefined {
+  const namespaceSegments = extractNamespace(metadata);
+  for (const [registeredNamespace, subagentType] of Object.entries(getRegisteredSubagentNamespaces(state))) {
+    const matchesRegisteredNamespace = namespaceSegments.some(
+      segment => segment === registeredNamespace || segment.startsWith(`${registeredNamespace}:`),
+    );
+    if (matchesRegisteredNamespace) {
+      return {
+        type: subagentType,
+        namespace: registeredNamespace,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function shouldEmitToolInputPreview(toolName: string | undefined): boolean {
+  return !!toolName && ALLOW_TOOL_INPUT.includes(toolName as EToolName);
+}
+
+function shouldSummarizeToolCallResult(toolName: string): boolean {
+  return SUMMARIZED_TOOL_CALL_RESULT_NAMES.includes(toolName);
+}
+
+function summarizeToolCallResult(text: string): string {
+  if (text.length <= 100) {
+    return text;
+  }
+
+  return `${text.slice(0, 50)}\n...\n${text.slice(-50)}`;
+}
+
+function createToolInputEvent(
+  toolName: string,
+  toolCallChunks: AIMessageChunk['tool_call_chunks'],
+  node: ENodeName | undefined,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  if (!shouldEmitToolInputPreview(toolName)) {
+    return undefined;
+  }
+
+  return makeEvent(
+    'tool-input',
+    node,
+    { name: toolName, input: getToolArgs(toolCallChunks) },
+    subagent,
+  );
+}
+
+function writeStreamDebugLog(event: string, name: string, node: ENodeName | undefined, data: Record<string, unknown>): void {
+  if (!STREAM_DEBUG) {
+    return;
+  }
+
+  const debugData = STREAM_DEBUG_INCLUDE_DATA
+    ? data
+    : {
+      keys: Object.keys(data || {}).slice(0, 12),
+      size: JSON.stringify(data || {}).length,
+    };
+  const debugInfo = JSON.stringify({ event, name, node, data: debugData });
+  const debugPath = path.join(process.cwd(), 'DEBUG.txt');
+  void appendFile(debugPath, debugInfo + '\n', 'utf-8');
+}
+
+export function handleChainStart(
+  name: string,
+  node: ENodeName | undefined,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  if (!node || !(TalkableAgents as string[]).includes(name)) return undefined;
+  log('agent-start: ' + name);
+  return makeEvent('agent-start', node, name, subagent);
+}
+
+export function handleChainEnd(
+  name: string,
+  node: ENodeName | undefined,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  if (!node || !(TalkableAgents as string[]).includes(name)) return undefined;
+  log('agent-end: ' + name);
+  return makeEvent('agent-end', node, name, subagent);
+}
+
+export function handleChatModelStart(node: ENodeName | undefined, subagent?: StreamSubagentInfo): IGraphEvent | undefined {
+  log('chat-start: ' + node);
+  return makeEvent('assistant-start', node, node, subagent);
+}
+
+export function handleChatModelEnd(
+  node: ENodeName | undefined,
+  data?: Record<string, unknown>,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  log('chat-end: ' + node);
+  const usage = extractTokenUsage(data);
+  return makeEvent('assistant-end', node, {
+    node,
+    ...(usage ? { usage } : {}),
+  }, subagent);
+}
+
+export function handleChatModelStream(
+  data: { chunk: unknown },
+  node: ENodeName | undefined,
+  state: ToolInputState,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (!data.chunk || !isAIMessageChunk(data.chunk as any)) return undefined;
+
+  const chunk = data.chunk as AIMessageChunk;
+  const { tool_call_chunks } = chunk;
+  const { text, thinking, tool } = parseChunk(chunk);
+
+  if (tool) {
+    state.inputtingTool = tool;
+    return createToolInputEvent(tool, tool_call_chunks, node, subagent);
+  }
+
+  if (state.inputtingTool && tool_call_chunks?.length) {
+    return createToolInputEvent(state.inputtingTool, tool_call_chunks, node, subagent);
+  }
+
+  if (text || thinking) {
+    return makeEvent('assistant', node, { thinking, content: text }, subagent);
+  }
+
+  return undefined;
+}
+
+export function handleChainStream(
+  data: { chunk?: Record<string, unknown> },
+  node: ENodeName | undefined,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  const interrupts = data.chunk?.__interrupt__;
+  if (!Array.isArray(interrupts) || interrupts.length === 0) {
+    return undefined;
+  }
+
+  const interrupt = interrupts[0] as { id?: string; value?: unknown };
+  if (!interrupt?.value || typeof interrupt.value !== 'object') {
+    return undefined;
+  }
+
+  const payload = interrupt.value as IAskUserPayload;
+  const payloadNode = payload.agent && TalkableAgents.includes(payload.agent) ? payload.agent : node;
+  log(`ask-user interrupt: ${JSON.stringify(payload)}`);
+  return makeEvent('interrupt', payloadNode, { interruptId: interrupt.id, ...payload }, subagent);
+}
+
+export function handleToolStart(
+  runId: string,
+  name: string,
+  data: { input: { input: string } },
+  node: ENodeName | undefined,
+  state: ToolInputState,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  state.inputtingTool = undefined;
+  log(`tool-start: ${name}`);
+
+  // ask-user 工具发出专属事件，前端将其强制展示（不折叠）
+  if (name === EToolName.AskUser) {
+    return undefined;
+  }
+
+  const input: string = data.input.input;
+  log(`tool-call(${name}): ${input}`);
+
+  return makeEvent('tool-call', node, { id: runId, name, input }, subagent);
+}
+
+export function handleToolEnd(
+  runId: string,
+  name: string,
+  data: { output: { artifact: unknown; content: unknown } },
+  node: ENodeName | undefined,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  if (name === EToolName.AskUser) {
+    return undefined;
+  }
+
+  const { artifact, content } = data.output;
+
+  if (artifact instanceof Error) {
+    log(`tool-call-result(${name}).error: ${artifact.message}`);
+  } else {
+    log(`tool-call-result(${name}).artifact: ${tryJSONStringify(artifact) ?? 'undefined'}`);
+  }
+  log(`tool-call-result(${name}).content: ${content}`);
+
+  const output = resolveToolOutput(artifact, content);
+  const toolError = extractToolError(artifact) ?? extractToolError(output);
+  const outputStr = artifact instanceof Error
+    ? (artifact as Error).message
+    : toolError ?? (typeof output === 'string' ? output : tryJSONStringify(output) ?? '');
+  const outputLength = outputStr.length;
+  const summarizedOutput = shouldSummarizeToolCallResult(name)
+    ? summarizeToolCallResult(outputStr)
+    : outputStr;
+
+  return makeEvent('tool-call-result', node, {
+    id: runId,
+    name,
+    outputLength,
+    ...(artifact instanceof Error || toolError
+      ? { error: summarizedOutput }
+      : { output: shouldSummarizeToolCallResult(name) ? summarizedOutput : output }),
+  }, subagent);
+}
+
+export function handleToolError(
+  runId: string,
+  name: string,
+  data: { error?: unknown },
+  node: ENodeName | undefined,
+  subagent?: StreamSubagentInfo,
+): IGraphEvent | undefined {
+  if (name === EToolName.AskUser) {
+    return undefined;
+  }
+
+  const message = extractToolError(data.error) ?? tryJSONStringify(data.error) ?? 'Tool execution failed';
+  log(`tool-call-result(${name}).error: ${message}`);
+  const summarizedMessage = shouldSummarizeToolCallResult(name)
+    ? summarizeToolCallResult(message)
+    : message;
+
+  return makeEvent('tool-call-result', node, {
+    id: runId,
+    name,
+    outputLength: message.length,
+    error: summarizedMessage,
+  }, subagent);
+}
+
+function buildSubagentInfo(name: string, data: Record<string, unknown>, metadata: StreamMetadata | undefined, state: ToolInputState) {
+  if (name === TASK_TOOL_NAME) {
+    registerTaskSubagentNamespace(name, data, metadata, state);
+  }
+
+  return resolveSubagentInfo(metadata, state);
+}
+
+export function dispatchStreamEvent(
+  event: string,
+  ctx: StreamContext,
+  state: ToolInputState,
+): IGraphEvent | undefined {
+  const { run_id, name, data, node, metadata } = ctx;
+  const subagent = buildSubagentInfo(name, data, metadata, state);
+
+  // 默认关闭流式调试，避免敏感数据落盘与同步 IO 阻塞。
+  writeStreamDebugLog(event, name, node, data);
+
+  switch (event) {
+    case 'on_chain_start':
+      return handleChainStart(name, node, subagent);
+    case 'on_chain_end':
+      return handleChainEnd(name, node, subagent);
+    case 'on_chat_model_start':
+      return handleChatModelStart(node, subagent);
+    case 'on_chat_model_end':
+      return handleChatModelEnd(node, data, subagent);
+    case 'on_chat_model_stream':
+      return handleChatModelStream(data as { chunk: unknown }, node, state, subagent);
+    case 'on_chain_stream':
+      return handleChainStream(data as { chunk?: Record<string, unknown> }, node, subagent);
+    case 'on_tool_start':
+      return handleToolStart(
+        run_id,
+        name,
+        data as { input: { input: string } },
+        node,
+        state,
+        subagent,
+      );
+    case 'on_tool_end':
+      return handleToolEnd(
+        run_id,
+        name,
+        data as { output: { artifact: unknown; content: unknown } },
+        node,
+        subagent,
+      );
+    case 'on_tool_error':
+      return handleToolError(
+        run_id,
+        name,
+        data as { error?: unknown },
+        node,
+        subagent,
+      );
+    default:
+      return undefined;
+  }
+}

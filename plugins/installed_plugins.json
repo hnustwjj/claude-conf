@@ -1,0 +1,80 @@
+{
+  "version": 2,
+  "plugins": {
+    "claude-hud@claude-hud": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-hud/claude-hud/0.0.10",
+        "version": "0.0.10",
+        "installedAt": "2026-03-20T08:49:37.952Z",
+        "lastUpdated": "2026-03-20T08:49:37.952Z",
+        "gitCommitSha": "26e38decd762f1a2d31e6d83bf33193b3b293084"
+      }
+    ],
+    "frontend-design@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/frontend-design/unknown",
+        "version": "unknown",
+        "installedAt": "2026-03-24T09:19:05.630Z",
+        "lastUpdated": "2026-03-28T13:45:11.179Z",
+        "gitCommitSha": "79caa0d824acb760fd9c023acb39c6c7da5ee7fc"
+      }
+    ],
+    "context7@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/context7/unknown",
+        "version": "unknown",
+        "installedAt": "2026-03-28T17:48:32.355Z",
+        "lastUpdated": "2026-03-28T17:48:32.355Z"
+      }
+    ],
+    "superpowers@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.6",
+        "version": "5.0.6",
+        "installedAt": "2026-03-28T17:49:10.379Z",
+        "lastUpdated": "2026-03-28T17:49:10.379Z",
+        "gitCommitSha": "eafe962b18f6c5dc70fb7c8cc7e83e61f4cdde06"
+      }
+    ],
+    "code-review@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/code-review/unknown",
+        "version": "unknown",
+        "installedAt": "2026-03-28T17:50:10.643Z",
+        "lastUpdated": "2026-03-28T17:50:10.643Z"
+      }
+    ],
+    "code-simplifier@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/code-simplifier/1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-03-28T17:50:10.667Z",
+        "lastUpdated": "2026-03-28T17:50:10.667Z"
+      }
+    ],
+    "typescript-lsp@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-03-28T17:50:10.686Z",
+        "lastUpdated": "2026-03-28T17:50:10.686Z"
+      }
+    ],
+    "skill-creator@claude-plugins-official": [
+      {
+        "scope": "user",
+        "installPath": "/Users/bytedance/.claude/plugins/cache/claude-plugins-official/skill-creator/unknown",
+        "version": "unknown",
+        "installedAt": "2026-03-28T17:50:10.820Z",
+        "lastUpdated": "2026-03-28T17:50:10.820Z"
+      }
+    ]
+  }
+}
